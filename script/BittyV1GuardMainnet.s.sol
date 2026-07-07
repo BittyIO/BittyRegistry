@@ -19,7 +19,7 @@ interface ImmutableCreate2Factory {
 contract Deploy is DeployScript {
     ImmutableCreate2Factory immutable factory = ImmutableCreate2Factory(0x0000000000FFe8B47B3e2130213B802212439497);
 
-    bytes32 salt = 0x0000000000000000000000000000000000000000f661562a20881000001f9862;
+    bytes32 salt = 0x0000000000000000000000000000000000000000050fe6b1c9cb400011f375bc;
 
     function deploy() public override {
         bytes memory initCode = type(BittyV1Guard).creationCode;
@@ -27,9 +27,10 @@ contract Deploy is DeployScript {
         address bittyGuardAddress = factory.safeCreate2(salt, initCode);
         BittyV1Guard bittyGuard = BittyV1Guard(bittyGuardAddress);
 
-        address[] memory assets = new address[](2);
+        address[] memory assets = new address[](3);
         assets[0] = getAddress("WETH");
         assets[1] = getAddress("WBTC");
+        assets[2] = getAddress("CRCLON");
 
         address[] memory stableCoins = new address[](2);
         stableCoins[0] = getAddress("USDT");
