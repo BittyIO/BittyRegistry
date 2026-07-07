@@ -110,6 +110,24 @@ contract BittyV1GuardTest is Test {
         assertEq(active.length, 0);
     }
 
+    function test_DeprecateUnregistered_DoesNotSetDeprecatedFlag() public {
+        address unreg = makeAddr("unregistered");
+        address[] memory addrs = new address[](1);
+        addrs[0] = unreg;
+
+        vm.startPrank(protocolOwner);
+        bittyGuard.deprecateLendingProtocols(addrs);
+        bittyGuard.deprecateStakingProtocols(addrs);
+        bittyGuard.deprecateAMMProtocols(addrs);
+        bittyGuard.deprecateIntentProtocols(addrs);
+        vm.stopPrank();
+
+        assertFalse(bittyGuard.isLendingProtocolDeprecated(unreg));
+        assertFalse(bittyGuard.isStakingProtocolDeprecated(unreg));
+        assertFalse(bittyGuard.isAMMProtocolDeprecated(unreg));
+        assertFalse(bittyGuard.isIntentProtocolDeprecated(unreg));
+    }
+
     function test_AddStakingProtocols() public {
         vm.prank(protocolOwner);
         bittyGuard.addStakingProtocols(stakingProtocols);
@@ -421,7 +439,7 @@ contract BittyV1GuardTest is Test {
         assertEq(bittyGuard.owner(), deployAdmin);
     }
 
-    function _assertSameMembers(address[] memory actual, address[] memory expected) pure internal {
+    function _assertSameMembers(address[] memory actual, address[] memory expected) internal pure {
         assertEq(actual.length, expected.length, "array length mismatch");
         for (uint256 i = 0; i < expected.length; i++) {
             bool found;

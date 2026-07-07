@@ -147,8 +147,7 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
         onlyRole(LENDING_MANAGER_ROLE)
     {
         for (uint256 i = 0; i < lendingProtocolAddresses.length; i++) {
-            if (lendingProtocolAddresses[i] != address(0)) {
-                _lendingProtocols.remove(lendingProtocolAddresses[i]);
+            if (lendingProtocolAddresses[i] != address(0) && _lendingProtocols.remove(lendingProtocolAddresses[i])) {
                 deprecatedLendingProtocols[lendingProtocolAddresses[i]] = true;
             }
         }
@@ -193,8 +192,7 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
         onlyRole(STAKING_MANAGER_ROLE)
     {
         for (uint256 i = 0; i < stakingProtocolAddress.length; i++) {
-            if (stakingProtocolAddress[i] != address(0)) {
-                _stakingProtocols.remove(stakingProtocolAddress[i]);
+            if (stakingProtocolAddress[i] != address(0) && _stakingProtocols.remove(stakingProtocolAddress[i])) {
                 deprecatedStakingProtocols[stakingProtocolAddress[i]] = true;
             }
         }
@@ -215,8 +213,7 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
 
     function deprecateAMMProtocols(address[] memory ammProtocolAddresses) external override onlyRole(AMM_MANAGER_ROLE) {
         for (uint256 i = 0; i < ammProtocolAddresses.length; i++) {
-            if (ammProtocolAddresses[i] != address(0)) {
-                _ammProtocols.remove(ammProtocolAddresses[i]);
+            if (ammProtocolAddresses[i] != address(0) && _ammProtocols.remove(ammProtocolAddresses[i])) {
                 deprecatedAMMProtocols[ammProtocolAddresses[i]] = true;
             }
         }
@@ -257,8 +254,7 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
         onlyRole(INTENT_MANAGER_ROLE)
     {
         for (uint256 i = 0; i < intentProtocolAddresses.length; i++) {
-            if (intentProtocolAddresses[i] != address(0)) {
-                _intentProtocols.remove(intentProtocolAddresses[i]);
+            if (intentProtocolAddresses[i] != address(0) && _intentProtocols.remove(intentProtocolAddresses[i])) {
                 deprecatedIntentProtocols[intentProtocolAddresses[i]] = true;
             }
         }
