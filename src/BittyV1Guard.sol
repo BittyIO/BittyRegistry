@@ -47,13 +47,23 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
     EnumerableSet.AddressSet internal _ammProtocols;
     EnumerableSet.AddressSet internal _intentProtocols;
 
-    constructor() AccessControlDefaultAdminRules(DEFAULT_ADMIN_TRANSFER_DELAY, tx.origin) {
-        _grantRole(ASSET_MANAGER_ROLE, tx.origin);
-        _grantRole(STABLE_COIN_MANAGER_ROLE, tx.origin);
-        _grantRole(LENDING_MANAGER_ROLE, tx.origin);
-        _grantRole(STAKING_MANAGER_ROLE, tx.origin);
-        _grantRole(AMM_MANAGER_ROLE, tx.origin);
-        _grantRole(INTENT_MANAGER_ROLE, tx.origin);
+    // The guard may only be deployed by a transaction originated by this address, and all roles
+    // are granted to it. tx.origin is used (not msg.sender) because the guard is deployed through
+    // a CREATE2 factory, so msg.sender is that factory, not the deployer EOA. As a constant it keeps
+    // the init code — and thus the CREATE2 address — identical on every chain, so a squatter can
+    // neither deploy the canonical guard nor become its admin.
+    address public constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
+
+    error NotDeployer();
+
+    constructor() AccessControlDefaultAdminRules(DEFAULT_ADMIN_TRANSFER_DELAY, DEPLOYER) {
+        if (tx.origin != DEPLOYER) revert NotDeployer();
+        _grantRole(ASSET_MANAGER_ROLE, DEPLOYER);
+        _grantRole(STABLE_COIN_MANAGER_ROLE, DEPLOYER);
+        _grantRole(LENDING_MANAGER_ROLE, DEPLOYER);
+        _grantRole(STAKING_MANAGER_ROLE, DEPLOYER);
+        _grantRole(AMM_MANAGER_ROLE, DEPLOYER);
+        _grantRole(INTENT_MANAGER_ROLE, DEPLOYER);
     }
 
     function initialize(

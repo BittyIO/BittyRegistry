@@ -35,11 +35,10 @@ contract BittyV1GuardTest is Test {
         mockWBTC = new MockERC20("WBTC", "WBTC", 8);
         mockUSDT = new MockERC20("USDT", "USDT", 6);
         mockUSDC = new MockERC20("USDC", "USDC", 6);
-        // `BittyV1Guard` grants `DEFAULT_ADMIN_ROLE` to `tx.origin`; align origin with a fixed admin for stable tests.
-        deployAdmin = makeAddr("deployAdmin");
-        vm.startPrank(deployAdmin, deployAdmin);
+        // BittyV1Guard can only be deployed by tx.origin == DEPLOYER, which becomes its admin.
+        deployAdmin = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
+        vm.prank(deployAdmin, deployAdmin);
         bittyGuard = new BittyV1Guard();
-        vm.stopPrank();
         vm.startPrank(deployAdmin);
         bittyGuard.grantRole(bittyGuard.ASSET_MANAGER_ROLE(), protocolOwner);
         bittyGuard.grantRole(bittyGuard.STABLE_COIN_MANAGER_ROLE(), protocolOwner);
@@ -62,6 +61,19 @@ contract BittyV1GuardTest is Test {
         ammProtocols[0] = ammProtocol;
         intentProtocols = new address[](1);
         intentProtocols[0] = intentProtocol;
+    }
+
+    function test_OnlyDeployerCanDeployGuard() public {
+        address randomDeployer = makeAddr("randomDeployer");
+        vm.prank(randomDeployer, randomDeployer);
+        vm.expectRevert(BittyV1Guard.NotDeployer.selector);
+        new BittyV1Guard();
+
+        address deployer = bittyGuard.DEPLOYER();
+        vm.prank(deployer, deployer);
+        BittyV1Guard g = new BittyV1Guard();
+        assertTrue(g.hasRole(g.DEFAULT_ADMIN_ROLE(), deployer));
+        assertFalse(g.hasRole(g.DEFAULT_ADMIN_ROLE(), randomDeployer));
     }
 
     function test_AddRegisteredAssets() public {
