@@ -15,6 +15,18 @@ interface ImmutableCreate2Factory {
         returns (address deploymentAddress);
 }
 
+/**
+ * @notice Base (chain 8453). Same contract, same salt, same deployer as the other chains, so the
+ *         guard lands on the SAME address here that it holds elsewhere — the guard takes no
+ *         constructor arguments, so its init code is bytecode alone and CREATE2 is chain-independent.
+ *         ImmutableCreate2Factory is deployed at the usual address on Base, and its containsCaller
+ *         check means this DEPLOYER-prefixed salt is unusable by anyone else.
+ *
+ *         The registry differs from mainnet's because Base's tokens do. BTC here is cbBTC, NOT the
+ *         bridged WBTC: that token exists on Base (0x0555E30d...) but held ~64 BTC against cbBTC's
+ *         ~44,700, so registering it would offer vaults a market too thin to fill them. USDbC (the
+ *         older bridged USDC) is left out for the same reason — new vaults should hold native USDC.
+ */
 contract Deploy is DeployScript {
     ImmutableCreate2Factory immutable factory = ImmutableCreate2Factory(0x0000000000FFe8B47B3e2130213B802212439497);
 
@@ -26,10 +38,9 @@ contract Deploy is DeployScript {
         address bittyGuardAddress = factory.safeCreate2(salt, initCode);
         BittyV1Guard bittyGuard = BittyV1Guard(bittyGuardAddress);
 
-        address[] memory assets = new address[](3);
+        address[] memory assets = new address[](2);
         assets[0] = getAddress("WETH");
-        assets[1] = getAddress("WBTC");
-        assets[2] = getAddress("CRCLON");
+        assets[1] = getAddress("CBBTC");
 
         address[] memory stableCoins = new address[](2);
         stableCoins[0] = getAddress("USDT");

@@ -56,128 +56,75 @@ interface IBittyV1Guard {
     function isStableCoinRegistered(address stableCoinAddress) external view returns (bool);
 
     /**
-     * @notice Add a yield protocol to Bitty.
-     * @dev Add a yield protocol to Bitty.
-     * @param lendingProtocolAddresses The addresses of the yield protocols.
+     * @notice Register protocols. Each one's category comes from the protocol itself.
+     * @dev Nothing here names a category. A protocol declares one of the four Bitty protocol
+     *      interfaces via ERC-165, and this reads that declaration rather than taking the caller's
+     *      word for it — so a category cannot be misdeclared at the registry, only by the protocol
+     *      about itself, and a protocol that declares nothing recognisable cannot be listed at all.
+     *
+     *      Exactly one category is required. One declaring two would be admissible by the manager of
+     *      either and usable as the other, which routes around the split between manager roles.
+     *
+     *      The caller must hold the manager role for the category each protocol declares, checked per
+     *      protocol — so a batch spanning categories needs a caller holding all of them.
+     *
+     *      Re-registering a deprecated protocol clears its deprecation.
+     * @param protocolAddresses The addresses of the protocols. Zero addresses are skipped.
      */
-    function addLendingProtocols(address[] memory lendingProtocolAddresses) external;
+    function addProtocols(address[] memory protocolAddresses) external;
 
     /**
-     * @notice Deprecate a yield protocol from Bitty.
-     * @dev Deprecate a yield protocol from Bitty.
-     *      A deprecated yield protocol is only used for withdrawals, can not supply to it anymore.
-     * @param lendingProtocolAddresses The addresses of the yield protocols.
+     * @notice Deprecate protocols.
+     * @dev A deprecated protocol is only good for getting OUT — existing positions can still be
+     *      withdrawn or unstaked, but nothing new may enter it. It leaves the registered set and is
+     *      remembered as deprecated, which is why this is not the same as removal.
+     *
+     *      Authority comes from the category recorded at registration, not a fresh probe of the
+     *      protocol: this is the lever you reach for when a protocol has misbehaved, and it must not
+     *      stop working because that protocol stopped answering.
+     * @param protocolAddresses The addresses of the protocols. Ones that were never registered are
+     *        skipped rather than marked, so this is not a way to record an unknown address.
      */
-    function deprecateLendingProtocols(address[] memory lendingProtocolAddresses) external;
+    function deprecateProtocols(address[] memory protocolAddresses) external;
 
     /**
-     * @notice Check if a yield protocol is registered.
-     * @dev Check if a yield protocol is registered.
-     * @param lendingProtocolAddress The address of the yield protocol.
-     * @return bool True if the yield protocol is registered, false otherwise.
+     * @notice Is this protocol registered and not deprecated?
+     * @dev Says nothing about WHICH category — read {protocolCategory} for that. The two questions
+     *      are separate because callers ask them separately: the vault checks that a protocol is
+     *      permitted at all, then that it is the kind of protocol this particular call needs.
+     * @param protocolAddress The address of the protocol.
+     * @return bool True if registered.
      */
-    function isLendingProtocolRegistered(address lendingProtocolAddress) external view returns (bool);
+    function isProtocolRegistered(address protocolAddress) external view returns (bool);
 
     /**
-     * @notice Check if a yield protocol is deprecated.
-     * @dev Check if a yield protocol is deprecated.
-     * @param lendingProtocolAddress The address of the yield protocol.
-     * @return bool True if the yield protocol is deprecated, false otherwise.
+     * @notice Is this protocol deprecated?
+     * @dev Deliberately separate from {isProtocolRegistered}: the two directions differ. Entering a
+     *      deprecated protocol should fail, while exiting one must keep working, or positions would
+     *      be stranded. Callers layer the rule they need rather than getting one baked in here.
+     * @param protocolAddress The address of the protocol.
+     * @return bool True if deprecated.
      */
-    function isLendingProtocolDeprecated(address lendingProtocolAddress) external view returns (bool);
+    function isProtocolDeprecated(address protocolAddress) external view returns (bool);
 
     /**
-     * @notice Add a staking protocol to Bitty.
-     * @dev Add a staking protocol to Bitty.
-     * @param stakingProtocols the addresses of the staking protocols.
+     * @notice The category a protocol declared when it was registered.
+     * @dev The ERC-165 id of one of the four Bitty protocol interfaces, or 0 for an address that was
+     *      never registered. Recorded at registration rather than re-derived, so reading it costs a
+     *      storage load instead of an ERC-165 probe.
+     * @param protocolAddress The address of the protocol.
+     * @return bytes4 The category interface id, or 0.
      */
-    function addStakingProtocols(address[] memory stakingProtocols) external;
+    function protocolCategory(address protocolAddress) external view returns (bytes4);
 
     /**
-     * @notice Check if a staking protocol is registered.
-     * @dev Check if a staking protocol is registered.
-     * @param stakingProtocol The address of the staking protocol.
-     * @return bool True if the staking protocol is registered, false otherwise.
+     * @notice Every ACTIVE protocol — registered and not deprecated, across all categories.
+     * @dev Deprecated entries are absent because a user should not be offered a protocol they can
+     *      only exit; {isProtocolDeprecated} still answers for a position someone already holds.
+     *      Callers wanting one category filter on {protocolCategory}.
+     * @return addresses The active protocols.
      */
-    function isStakingProtocolRegistered(address stakingProtocol) external view returns (bool);
-
-    /**
-     * @notice Deprecate a staking protocol from Bitty.
-     * @dev Deprecate a staking protocol from Bitty.
-     *      A deprecated staking protocol is only used for withdrawals, can not supply to it anymore.
-     * @param stakingProtocols The addresses of the staking protocols.
-     */
-    function deprecateStakingProtocols(address[] memory stakingProtocols) external;
-
-    /**
-     * @notice Check if a staking protocol is deprecated.
-     * @dev Check if a staking protocol is deprecated.
-     * @param stakingProtocolAddress The address of the staking protocol.
-     * @return bool True if the staking protocol is deprecated, false otherwise.
-     */
-    function isStakingProtocolDeprecated(address stakingProtocolAddress) external view returns (bool);
-
-    /**
-     * @notice Add an intent protocol to Bitty.
-     * @dev Add an intent protocol to Bitty.
-     * @param intentProtocolAddresses The addresses of the intent protocols.
-     */
-    function addIntentProtocols(address[] memory intentProtocolAddresses) external;
-
-    /**
-     * @notice Check if an intent protocol is registered.
-     * @dev Check if an intent protocol is registered.
-     * @param intentProtocolAddress The address of the intent protocol.
-     * @return bool True if the intent protocol is registered, false otherwise.
-     */
-    function isIntentProtocolRegistered(address intentProtocolAddress) external view returns (bool);
-
-    /**
-     * @notice Deprecate an intent protocol from Bitty.
-     * @dev Deprecate an intent protocol from Bitty.
-     *      A deprecated intent protocol is only used for canceling trades, can not be used for executing trades anymore.
-     * @param intentProtocolAddresses The addresses of the intent protocols.
-     */
-    function deprecateIntentProtocols(address[] memory intentProtocolAddresses) external;
-
-    /**
-     * @notice Check if an intent protocol is deprecated.
-     * @dev Check if an intent protocol is deprecated.
-     * @param intentProtocolAddress The address of the intent protocol.
-     * @return bool True if the intent protocol is deprecated, false otherwise.
-     */
-    function isIntentProtocolDeprecated(address intentProtocolAddress) external view returns (bool);
-
-    /**
-     * @notice Add a swap protocol to Bitty.
-     * @dev Add a swap protocol to Bitty.
-     * @param ammProtocolAddresses The addresses of the swap protocols.
-     */
-    function addAMMProtocols(address[] memory ammProtocolAddresses) external;
-
-    /**
-     * @notice Deprecate a swap protocol from Bitty.
-     * @dev Deprecate a swap protocol from Bitty.
-     *      A deprecated swap protocol is only used for removing LP, can not add LP anymore.
-     * @param ammProtocolAddresses The addresses of the swap protocols.
-     */
-    function deprecateAMMProtocols(address[] memory ammProtocolAddresses) external;
-
-    /**
-     * @notice Check if a swap protocol is registered.
-     * @dev Check if a swap protocol is registered.
-     * @param ammProtocolAddress The address of the swap protocol.
-     * @return bool True if the swap protocol is registered, false otherwise.
-     */
-    function isAMMProtocolRegistered(address ammProtocolAddress) external view returns (bool);
-
-    /**
-     * @notice Check if a swap protocol is deprecated.
-     * @dev Check if a swap protocol is deprecated.
-     * @param ammProtocolAddress The address of the swap protocol.
-     * @return bool True if the swap protocol is deprecated, false otherwise.
-     */
-    function isAMMProtocolDeprecated(address ammProtocolAddress) external view returns (bool);
+    function getProtocols() external view returns (address[] memory addresses);
 
     /**
      * @notice Get the registered assets.
@@ -192,32 +139,4 @@ interface IBittyV1Guard {
      * @return addresses The addresses of the registered stable coins.
      */
     function getStableCoins() external view returns (address[] memory addresses);
-
-    /**
-     * @notice Get the registered AMM protocols.
-     * @dev Get the registered AMM protocols.
-     * @return addresses The addresses of the registered AMM protocols.
-     */
-    function getAMMProtocols() external view returns (address[] memory addresses);
-
-    /**
-     * @notice Get the registered lending protocols.
-     * @dev Get the registered lending protocols.
-     * @return addresses The addresses of the registered lending protocols.
-     */
-    function getLendingProtocols() external view returns (address[] memory addresses);
-
-    /**
-     * @notice Get the registered staking protocols.
-     * @dev Get the registered staking protocols.
-     * @return addresses The addresses of the registered staking protocols.
-     */
-    function getStakingProtocols() external view returns (address[] memory addresses);
-
-    /**
-     * @notice Get the registered intent protocols.
-     * @dev Get the registered intent protocols.
-     * @return addresses The addresses of the registered intent protocols.
-     */
-    function getIntentProtocols() external view returns (address[] memory addresses);
 }

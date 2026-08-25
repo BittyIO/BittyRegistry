@@ -7,6 +7,7 @@ import {
 } from "openzeppelin-contracts/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
 import {IBittyV1Guard} from "./interfaces/IBittyV1Guard.sol";
 import {EnumerableSet} from "openzeppelin-contracts/contracts/utils/structs/EnumerableSet.sol";
+import {ERC165Checker} from "openzeppelin-contracts/contracts/utils/introspection/ERC165Checker.sol";
 
 /**
  * @title BittyV1Guard
@@ -35,26 +36,57 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
     /// @notice Role allowed to add/deprecate intent protocols.
     bytes32 public constant INTENT_MANAGER_ROLE = keccak256("INTENT_MANAGER_ROLE");
 
-    mapping(address => bool) public deprecatedLendingProtocols;
-    mapping(address => bool) public deprecatedStakingProtocols;
-    mapping(address => bool) public deprecatedAMMProtocols;
-    mapping(address => bool) public deprecatedIntentProtocols;
+    /**
+     * @notice ERC-165 ids for the four protocol categories, verified once here at registration.
+     * @dev The vault no longer keeps a set per category — it asks a protocol what it is and checks
+     *      that answer against these same ids. That only holds if a protocol's self-declared category
+     *      is true, so this is where it gets established: a protocol is admitted to a category only
+     *      if it declares the matching interface.
+     *
+     *      Hard-coded rather than derived via `type(I…).interfaceId` because the guard deliberately
+     *      does not depend on protocol-store — protocol-store already declares an {IBittyV1Guard},
+     *      so a dependency back would close a cycle between the two repos. The authoritative values
+     *      are pinned by `InterfaceIds.t.sol` in protocol-store; change these only together with it.
+     *
+     *      INTENT equals the ERC-1271 magic value because {IBittyV1IntentProtocol} declares only
+     *      `isValidSignature` — for an intent protocol the two claims are the same claim.
+     */
+    bytes4 internal constant LENDING_INTERFACE_ID = 0xb9f16a0c;
+    bytes4 internal constant STAKING_INTERFACE_ID = 0xc8ada217;
+    bytes4 internal constant AMM_INTERFACE_ID = 0x932722bd;
+    bytes4 internal constant INTENT_INTERFACE_ID = 0x1626ba7e;
+
+    /**
+     * @notice Every registered protocol, in one set — the category is not part of the key.
+     * @dev Nobody TELLS this contract a protocol's category any more: a protocol declares its own via
+     *      ERC-165, and registration reads that declaration once and records it in {protocolCategory}.
+     *      So a category stops being an argument threaded through every call and becomes a property
+     *      of the protocol, which is the only place it was ever really known.
+     */
+    EnumerableSet.AddressSet internal _protocols;
+    mapping(address => bool) public deprecatedProtocols;
+
+    /**
+     * @notice The category a protocol declared when it was registered, or 0 if it never was.
+     * @dev Recorded rather than re-derived on each read, for two reasons. Reading it is a storage
+     *      load instead of the three staticcalls an {ERC165Checker} probe costs, which matters
+     *      because the vault consults it on every deposit and withdrawal. And it stays answerable if
+     *      the protocol later stops responding — which is exactly when deprecating it matters most.
+     */
+    mapping(address => bytes4) public protocolCategory;
 
     EnumerableSet.AddressSet internal _assets;
     EnumerableSet.AddressSet internal _stableCoins;
-    EnumerableSet.AddressSet internal _lendingProtocols;
-    EnumerableSet.AddressSet internal _stakingProtocols;
-    EnumerableSet.AddressSet internal _ammProtocols;
-    EnumerableSet.AddressSet internal _intentProtocols;
 
-    // The guard may only be deployed by a transaction originated by this address, and all roles
-    // are granted to it. tx.origin is used (not msg.sender) because the guard is deployed through
-    // a CREATE2 factory, so msg.sender is that factory, not the deployer EOA. As a constant it keeps
-    // the init code — and thus the CREATE2 address — identical on every chain, so a squatter can
-    // neither deploy the canonical guard nor become its admin.
     address public constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
 
     error NotDeployer();
+
+    /// @notice The address declares none of the four Bitty protocol interfaces.
+    error NotABittyProtocol(address protocol);
+
+    /// @notice The protocol declares more than one category, so no single manager role governs it.
+    error AmbiguousProtocolCategory(address protocol);
 
     constructor() AccessControlDefaultAdminRules(DEFAULT_ADMIN_TRANSFER_DELAY, DEPLOYER) {
         if (tx.origin != DEPLOYER) revert NotDeployer();
@@ -76,10 +108,10 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
     ) public initializer onlyRole(DEFAULT_ADMIN_ROLE) {
         _addAssets(assets_);
         _addStableCoins(stableCoins_);
-        _addLendingProtocols(lendingProtocols_);
-        _addStakingProtocols(stakingProtocols_);
-        _addAMMProtocols(ammProtocols_);
-        _addIntentProtocols(intentProtocols_);
+        _addProtocols(lendingProtocols_);
+        _addProtocols(stakingProtocols_);
+        _addProtocols(ammProtocols_);
+        _addProtocols(intentProtocols_);
     }
 
     function addAssets(address[] memory assetAddresses) external override onlyRole(ASSET_MANAGER_ROLE) {
@@ -134,165 +166,69 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
         return _stableCoins.contains(stableCoinAddress);
     }
 
-    function addLendingProtocols(address[] memory lendingProtocolAddresses)
-        external
-        override
-        onlyRole(LENDING_MANAGER_ROLE)
-    {
-        _addLendingProtocols(lendingProtocolAddresses);
+    function _declaredCategory(address protocol) private view returns (bytes4 category) {
+        bytes4[4] memory ids = [LENDING_INTERFACE_ID, STAKING_INTERFACE_ID, AMM_INTERFACE_ID, INTENT_INTERFACE_ID];
+        for (uint256 i = 0; i < ids.length; i++) {
+            if (ERC165Checker.supportsInterface(protocol, ids[i])) {
+                if (category != bytes4(0)) revert AmbiguousProtocolCategory(protocol);
+                category = ids[i];
+            }
+        }
+        if (category == bytes4(0)) revert NotABittyProtocol(protocol);
     }
 
-    function _addLendingProtocols(address[] memory lendingProtocolAddresses) internal {
-        for (uint256 i = 0; i < lendingProtocolAddresses.length; i++) {
-            if (lendingProtocolAddresses[i] != address(0)) {
-                _lendingProtocols.add(lendingProtocolAddresses[i]);
-                deprecatedLendingProtocols[lendingProtocolAddresses[i]] = false;
+    function _categoryRole(bytes4 categoryInterfaceId) private pure returns (bytes32) {
+        if (categoryInterfaceId == LENDING_INTERFACE_ID) return LENDING_MANAGER_ROLE;
+        if (categoryInterfaceId == STAKING_INTERFACE_ID) return STAKING_MANAGER_ROLE;
+        if (categoryInterfaceId == AMM_INTERFACE_ID) return AMM_MANAGER_ROLE;
+        return INTENT_MANAGER_ROLE;
+    }
+
+    function addProtocols(address[] memory protocolAddresses) external override {
+        _addProtocols(protocolAddresses);
+    }
+
+    function _addProtocols(address[] memory protocolAddresses) internal {
+        for (uint256 i = 0; i < protocolAddresses.length; i++) {
+            address protocol = protocolAddresses[i];
+            if (protocol == address(0)) {
+                continue;
+            }
+            bytes4 category = _declaredCategory(protocol);
+            _checkRole(_categoryRole(category));
+            _protocols.add(protocol);
+            protocolCategory[protocol] = category;
+            deprecatedProtocols[protocol] = false;
+        }
+    }
+
+    function deprecateProtocols(address[] memory protocolAddresses) external override {
+        for (uint256 i = 0; i < protocolAddresses.length; i++) {
+            address protocol = protocolAddresses[i];
+            if (protocol == address(0)) {
+                continue;
+            }
+            bytes4 category = protocolCategory[protocol];
+            if (category == bytes4(0)) {
+                continue;
+            }
+            _checkRole(_categoryRole(category));
+            if (_protocols.remove(protocol)) {
+                deprecatedProtocols[protocol] = true;
             }
         }
     }
 
-    function deprecateLendingProtocols(address[] memory lendingProtocolAddresses)
-        external
-        override
-        onlyRole(LENDING_MANAGER_ROLE)
-    {
-        for (uint256 i = 0; i < lendingProtocolAddresses.length; i++) {
-            if (lendingProtocolAddresses[i] != address(0) && _lendingProtocols.remove(lendingProtocolAddresses[i])) {
-                deprecatedLendingProtocols[lendingProtocolAddresses[i]] = true;
-            }
-        }
+    function isProtocolRegistered(address protocolAddress) external view override returns (bool) {
+        return _protocols.contains(protocolAddress);
     }
 
-    function isLendingProtocolRegistered(address lendingProtocolAddress) external view override returns (bool) {
-        return _lendingProtocols.contains(lendingProtocolAddress);
+    function isProtocolDeprecated(address protocolAddress) external view override returns (bool) {
+        return deprecatedProtocols[protocolAddress];
     }
 
-    function isLendingProtocolDeprecated(address lendingProtocolAddress) external view override returns (bool) {
-        return deprecatedLendingProtocols[lendingProtocolAddress];
-    }
-
-    function addStakingProtocols(address[] memory stakingProtocolAddresses)
-        external
-        override
-        onlyRole(STAKING_MANAGER_ROLE)
-    {
-        _addStakingProtocols(stakingProtocolAddresses);
-    }
-
-    function _addStakingProtocols(address[] memory stakingProtocolAddresses) internal {
-        for (uint256 i = 0; i < stakingProtocolAddresses.length; i++) {
-            if (stakingProtocolAddresses[i] != address(0)) {
-                _stakingProtocols.add(stakingProtocolAddresses[i]);
-                deprecatedStakingProtocols[stakingProtocolAddresses[i]] = false;
-            }
-        }
-    }
-
-    function isStakingProtocolRegistered(address stakingProtocolAddress) external view override returns (bool) {
-        return _stakingProtocols.contains(stakingProtocolAddress);
-    }
-
-    function isStakingProtocolDeprecated(address stakingProtocolAddress) external view override returns (bool) {
-        return deprecatedStakingProtocols[stakingProtocolAddress];
-    }
-
-    function deprecateStakingProtocols(address[] memory stakingProtocolAddress)
-        external
-        override
-        onlyRole(STAKING_MANAGER_ROLE)
-    {
-        for (uint256 i = 0; i < stakingProtocolAddress.length; i++) {
-            if (stakingProtocolAddress[i] != address(0) && _stakingProtocols.remove(stakingProtocolAddress[i])) {
-                deprecatedStakingProtocols[stakingProtocolAddress[i]] = true;
-            }
-        }
-    }
-
-    function addAMMProtocols(address[] memory ammProtocolAddresses) external override onlyRole(AMM_MANAGER_ROLE) {
-        _addAMMProtocols(ammProtocolAddresses);
-    }
-
-    function _addAMMProtocols(address[] memory ammProtocolAddresses) internal {
-        for (uint256 i = 0; i < ammProtocolAddresses.length; i++) {
-            if (ammProtocolAddresses[i] != address(0)) {
-                _ammProtocols.add(ammProtocolAddresses[i]);
-                deprecatedAMMProtocols[ammProtocolAddresses[i]] = false;
-            }
-        }
-    }
-
-    function deprecateAMMProtocols(address[] memory ammProtocolAddresses) external override onlyRole(AMM_MANAGER_ROLE) {
-        for (uint256 i = 0; i < ammProtocolAddresses.length; i++) {
-            if (ammProtocolAddresses[i] != address(0) && _ammProtocols.remove(ammProtocolAddresses[i])) {
-                deprecatedAMMProtocols[ammProtocolAddresses[i]] = true;
-            }
-        }
-    }
-
-    function isAMMProtocolRegistered(address ammProtocolAddress) external view override returns (bool) {
-        return _ammProtocols.contains(ammProtocolAddress);
-    }
-
-    function isAMMProtocolDeprecated(address ammProtocolAddress) external view override returns (bool) {
-        return deprecatedAMMProtocols[ammProtocolAddress];
-    }
-
-    function addIntentProtocols(address[] memory intentProtocolAddresses)
-        external
-        override
-        onlyRole(INTENT_MANAGER_ROLE)
-    {
-        _addIntentProtocols(intentProtocolAddresses);
-    }
-
-    function _addIntentProtocols(address[] memory intentProtocolAddresses) internal {
-        for (uint256 i = 0; i < intentProtocolAddresses.length; i++) {
-            if (intentProtocolAddresses[i] != address(0)) {
-                _intentProtocols.add(intentProtocolAddresses[i]);
-                deprecatedIntentProtocols[intentProtocolAddresses[i]] = false;
-            }
-        }
-    }
-
-    function isIntentProtocolRegistered(address intentProtocolAddress) external view override returns (bool) {
-        return _intentProtocols.contains(intentProtocolAddress);
-    }
-
-    function deprecateIntentProtocols(address[] memory intentProtocolAddresses)
-        external
-        override
-        onlyRole(INTENT_MANAGER_ROLE)
-    {
-        for (uint256 i = 0; i < intentProtocolAddresses.length; i++) {
-            if (intentProtocolAddresses[i] != address(0) && _intentProtocols.remove(intentProtocolAddresses[i])) {
-                deprecatedIntentProtocols[intentProtocolAddresses[i]] = true;
-            }
-        }
-    }
-
-    function _activeAddresses(EnumerableSet.AddressSet storage set, mapping(address => bool) storage deprecatedMap)
-        private
-        view
-        returns (address[] memory active)
-    {
-        address[] memory all = set.values();
-        uint256 activeCount;
-        for (uint256 i = 0; i < all.length; i++) {
-            if (!deprecatedMap[all[i]]) {
-                activeCount++;
-            }
-        }
-        active = new address[](activeCount);
-        uint256 j;
-        for (uint256 i = 0; i < all.length; i++) {
-            if (!deprecatedMap[all[i]]) {
-                active[j++] = all[i];
-            }
-        }
-    }
-
-    function isIntentProtocolDeprecated(address intentProtocolAddress) external view override returns (bool) {
-        return deprecatedIntentProtocols[intentProtocolAddress];
+    function getProtocols() external view override returns (address[] memory addresses) {
+        return _protocols.values();
     }
 
     function getAssets() external view override returns (address[] memory addresses) {
@@ -301,21 +237,5 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
 
     function getStableCoins() external view override returns (address[] memory addresses) {
         return _stableCoins.values();
-    }
-
-    function getLendingProtocols() external view override returns (address[] memory addresses) {
-        return _activeAddresses(_lendingProtocols, deprecatedLendingProtocols);
-    }
-
-    function getStakingProtocols() external view override returns (address[] memory addresses) {
-        return _activeAddresses(_stakingProtocols, deprecatedStakingProtocols);
-    }
-
-    function getAMMProtocols() external view override returns (address[] memory addresses) {
-        return _activeAddresses(_ammProtocols, deprecatedAMMProtocols);
-    }
-
-    function getIntentProtocols() external view override returns (address[] memory addresses) {
-        return _activeAddresses(_intentProtocols, deprecatedIntentProtocols);
     }
 }
