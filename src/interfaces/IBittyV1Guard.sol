@@ -75,6 +75,24 @@ interface IBittyV1Guard {
     function isProtocolRegistered(address protocolAddress) external view returns (bool);
 
     /**
+     * @notice Every ACTIVE protocol - registered and not deprecated, across all categories.
+     * @dev The one list this guard still returns. A vault needs it to answer "does this NFT belong to
+     *      a protocol?", which it cannot work out from membership tests alone; assets have no such
+     *      question, so they are not enumerable.
+     * @return addresses The active protocols.
+     */
+    function getProtocols() external view returns (address[] memory addresses);
+
+    /**
+     * @notice Every DEPRECATED protocol.
+     * @dev The companion to {getProtocols}: a protocol is in exactly one of the two. Deprecated ones
+     *      stay enumerable because deprecation is exit-only - vaults keep positions in them, and a
+     *      caller identifying those positions still needs to see the protocol.
+     * @return addresses The deprecated protocols.
+     */
+    function getDeprecatedProtocols() external view returns (address[] memory addresses);
+
+    /**
      * @notice Is this protocol deprecated?
      * @dev Deliberately separate from {isProtocolRegistered}: the two directions differ. Entering a
      *      deprecated protocol should fail, while exiting one must keep working, or positions would

@@ -21,7 +21,7 @@ contract Deploy is DeployScript {
     uint8 internal constant STABLE_COIN_CATEGORY = 1;
     uint8 internal constant CRYPTO_CATEGORY = 2;
 
-    bytes32 salt = 0x12ee2de7bf086388b1d560eb95e7191edfab9823c63c57f483a30a0018a5e0a2;
+    bytes32 salt = 0x12ee2de7bf086388b1d560eb95e7191edfab9823d38cc78a0c8cc0000a4c7b70;
 
     function deploy() public override {
         bytes memory initCode = type(BittyV1Guard).creationCode;

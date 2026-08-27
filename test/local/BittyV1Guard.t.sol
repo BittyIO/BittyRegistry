@@ -767,4 +767,43 @@ contract BittyV1GuardTest is Test {
             out[i] = list[i];
         }
     }
+
+    /**
+     * @notice A deprecated protocol leaves {getProtocols} but stays in {getAllProtocols}.
+     * @dev The distinction is load-bearing, not cosmetic. Deprecation is exit-only: vaults keep
+     *      positions in the protocol, so a caller identifying those positions - recognising a
+     *      position NFT, say - must still be able to see it. Enumerating only the active set would
+     *      make a deprecated protocol's NFT indistinguishable from a stray token.
+     */
+    function test_DeprecatedProtocolMovesFromActiveListToDeprecatedList() public {
+        vm.startPrank(protocolOwner);
+        bittyGuard.addProtocols(lendingProtocols, _cats(lendingProtocols.length, LENDING_ID));
+        bittyGuard.deprecateProtocols(lendingProtocols);
+        vm.stopPrank();
+
+        assertFalse(bittyGuard.isProtocolRegistered(lendingProtocol), "still reads as registered");
+        assertTrue(bittyGuard.isProtocolDeprecated(lendingProtocol));
+
+        address[] memory active = bittyGuard.getProtocols();
+        for (uint256 i = 0; i < active.length; i++) {
+            assertTrue(active[i] != lendingProtocol, "deprecated protocol still in the active list");
+        }
+
+        bool found;
+        address[] memory deprecated = bittyGuard.getDeprecatedProtocols();
+        for (uint256 i = 0; i < deprecated.length; i++) {
+            if (deprecated[i] == lendingProtocol) found = true;
+        }
+        assertTrue(found, "deprecated protocol missing from the deprecated list");
+    }
+
+    /// @dev Deprecating twice is not a no-op that silently succeeds - the entry is already gone.
+    function test_DeprecateTwiceReverts() public {
+        vm.startPrank(protocolOwner);
+        bittyGuard.addProtocols(lendingProtocols, _cats(lendingProtocols.length, LENDING_ID));
+        bittyGuard.deprecateProtocols(lendingProtocols);
+        vm.expectRevert(abi.encodeWithSelector(NotRegisteredProtocol.selector, lendingProtocol));
+        bittyGuard.deprecateProtocols(lendingProtocols);
+        vm.stopPrank();
+    }
 }

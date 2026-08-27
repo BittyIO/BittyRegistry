@@ -6,19 +6,23 @@ import {
     AccessControlDefaultAdminRules
 } from "openzeppelin-contracts/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
 import {IBittyV1Guard, NotDeployer, LengthMismatch, NotRegisteredProtocol} from "./interfaces/IBittyV1Guard.sol";
+import {EnumerableSet} from "openzeppelin-contracts/contracts/utils/structs/EnumerableSet.sol";
 
 /**
  * @title BittyV1Guard
  * @notice Guard of allowed assets and protocols for Bitty.
  */
 contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdminRules {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
     uint48 internal constant DEFAULT_ADMIN_TRANSFER_DELAY = 7 days;
 
     bytes32 public constant ASSET_MANAGER_ROLE = keccak256("ASSET_MANAGER_ROLE");
     bytes32 public constant PROTOCOL_MANAGER_ROLE = keccak256("PROTOCOL_MANAGER_ROLE");
 
-    mapping(address => bool) internal _protocols;
-    mapping(address => bool) public deprecatedProtocols;
+    EnumerableSet.AddressSet internal _protocols;
+
+    EnumerableSet.AddressSet internal _deprecatedProtocols;
 
     mapping(address => uint8) public protocolCategory;
 
@@ -102,14 +106,12 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
             if (protocol == address(0) || categories[i] == 0) {
                 continue;
             }
-            if (_protocols[protocol] && protocolCategory[protocol] == categories[i]) {
+            if (_protocols.contains(protocol) && protocolCategory[protocol] == categories[i]) {
                 continue;
             }
-            _protocols[protocol] = true;
+            _protocols.add(protocol);
             protocolCategory[protocol] = categories[i];
-            if (deprecatedProtocols[protocol]) {
-                deprecatedProtocols[protocol] = false;
-            }
+            _deprecatedProtocols.remove(protocol);
             emit ProtocolAdded(protocol, categories[i]);
         }
     }
@@ -117,20 +119,27 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
     function deprecateProtocols(address[] memory protocolAddresses) external override onlyRole(PROTOCOL_MANAGER_ROLE) {
         for (uint256 i = 0; i < protocolAddresses.length; i++) {
             address protocol = protocolAddresses[i];
-            if (!_protocols[protocol]) {
+            if (!_protocols.remove(protocol)) {
                 revert NotRegisteredProtocol(protocol);
             }
-            _protocols[protocol] = false;
-            deprecatedProtocols[protocol] = true;
+            _deprecatedProtocols.add(protocol);
             emit ProtocolDeprecated(protocol);
         }
     }
 
     function isProtocolRegistered(address protocolAddress) external view override returns (bool) {
-        return _protocols[protocolAddress];
+        return _protocols.contains(protocolAddress);
+    }
+
+    function getProtocols() external view override returns (address[] memory addresses) {
+        return _protocols.values();
+    }
+
+    function getDeprecatedProtocols() external view override returns (address[] memory addresses) {
+        return _deprecatedProtocols.values();
     }
 
     function isProtocolDeprecated(address protocolAddress) external view override returns (bool) {
-        return deprecatedProtocols[protocolAddress];
+        return _deprecatedProtocols.contains(protocolAddress);
     }
 }
