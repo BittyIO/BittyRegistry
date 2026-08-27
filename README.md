@@ -4,9 +4,9 @@ On-chain registry of allowed assets and DeFi protocols for [Bitty](https://githu
 
 | Chain   | Address |
 |---------|---------|
-| Mainnet | [`0x00D4000023b177003fb1bF1d3160BaefF5c60000`](https://etherscan.io/address/0x00D4000023b177003fb1bF1d3160BaefF5c60000) |
-| Base    | [`0x00D4000023b177003fb1bF1d3160BaefF5c60000`](https://basescan.org/address/0x00D4000023b177003fb1bF1d3160BaefF5c60000) |
-| Sepolia | [`0xe70496E000AF00003a000067b0aF7E0000ddbdaF`](https://sepolia.etherscan.io/address/0xe70496E000AF00003a000067b0aF7E0000ddbdaF) |
+| Mainnet | [`0x00580099D09E00E5920000D032260060E527DC60`](https://etherscan.io/address/0x00580099D09E00E5920000D032260060E527DC60) |
+| Base    | [`0x00580099D09E00E5920000D032260060E527DC60`](https://basescan.org/address/0x00580099D09E00E5920000D032260060E527DC60) |
+| Sepolia | [`0x00580099D09E00E5920000D032260060E527DC60`](https://sepolia.etherscan.io/address/0x00580099D09E00E5920000D032260060E527DC60) |
 
 Mainnet and Base share the same CREATE2 address. Sepolia was deployed against a different init-code hash and therefore landed elsewhere.
 
