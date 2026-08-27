@@ -6,7 +6,6 @@ import {
     AccessControlDefaultAdminRules
 } from "openzeppelin-contracts/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
 import {IBittyV1Guard, NotDeployer, LengthMismatch, NotRegisteredProtocol} from "./interfaces/IBittyV1Guard.sol";
-import {ERC165Checker} from "openzeppelin-contracts/contracts/utils/introspection/ERC165Checker.sol";
 
 /**
  * @title BittyV1Guard
@@ -101,6 +100,9 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
         for (uint256 i = 0; i < protocolAddresses.length; i++) {
             address protocol = protocolAddresses[i];
             if (protocol == address(0) || categories[i] == 0) {
+                continue;
+            }
+            if (_protocols[protocol] && protocolCategory[protocol] == categories[i]) {
                 continue;
             }
             _protocols[protocol] = true;
