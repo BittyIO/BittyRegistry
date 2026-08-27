@@ -1,20 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.34;
 
-error NotRegistered();
-error Deprecated();
+error NotDeployer();
+error LengthMismatch();
+error NotRegisteredProtocol(address protocolAddress);
+error CategoryZero();
+error NotRegisteredProtocolCategory(uint8 category);
 
 /**
  * @title Manage the registered assets and protocols (v1).
  * @dev Manage the registered assets and protocols by Bitty.
  */
 interface IBittyV1Guard {
+    event AssetAdded(address indexed assetAddress, uint8 indexed category);
+    event AssetRemoved(address indexed assetAddress);
+    event ProtocolAdded(address indexed protocolAddress, uint8 indexed category);
+    event ProtocolDeprecated(address indexed protocolAddress);
+
     /**
-     * @notice Add a registered asset to Bitty.
-     * @dev Add a registered asset to Bitty.
+     * @notice Add registered assets to Bitty.
+     * @dev Each asset carries a category, the same way a protocol does. The guard does not interpret
+     *      the value beyond rejecting zero; what each number means is a convention shared with the
+     *      consumers that read it back from {assetCategory}.
      * @param assetAddresses The addresses of the assets.
+     * @param categories The category of each asset, positionally matched.
      */
-    function addAssets(address[] memory assetAddresses) external;
+    function addAssets(address[] memory assetAddresses, uint8[] memory categories) external;
 
     /**
      * @notice Remove a registered asset from Bitty.
@@ -33,57 +44,23 @@ interface IBittyV1Guard {
     function isAssetRegistered(address assetAddress) external view returns (bool);
 
     /**
-     * @notice Add a stable coin to Bitty.
-     * @dev Add a stable coin to Bitty.
-     * @param stableCoinAddresses The addresses of the stable coins.
+     * @notice The category an asset was registered under.
+     * @param assetAddress The address of the asset.
+     * @return uint8 The category, or 0 for an address that was never registered.
      */
-    function addStableCoins(address[] memory stableCoinAddresses) external;
+    function assetCategory(address assetAddress) external view returns (uint8);
 
     /**
-     * @notice Remove a stable coin from Bitty.
-     * @dev Remove a stable coin from Bitty.
-     *      A removed stable coin can only be sold, can not be bought anymore.
-     * @param stableCoinAddresses The addresses of the stable coins.
+     * @notice Add protocols to Bitty.
+     * @dev Add protocols to Bitty.
+     * @param protocolAddresses The addresses of the protocols.
      */
-    function removeStableCoins(address[] memory stableCoinAddresses) external;
+    function addProtocols(address[] memory protocolAddresses, uint8[] memory categories) external;
 
     /**
-     * @notice Check if a stable coin is registered.
-     * @dev Check if a stable coin is registered.
-     * @param stableCoinAddress The address of the stable coin.
-     * @return bool True if the stable coin is registered, false otherwise.
-     */
-    function isStableCoinRegistered(address stableCoinAddress) external view returns (bool);
-
-    /**
-     * @notice Register protocols. Each one's category comes from the protocol itself.
-     * @dev Nothing here names a category. A protocol declares one of the four Bitty protocol
-     *      interfaces via ERC-165, and this reads that declaration rather than taking the caller's
-     *      word for it — so a category cannot be misdeclared at the registry, only by the protocol
-     *      about itself, and a protocol that declares nothing recognisable cannot be listed at all.
-     *
-     *      Exactly one category is required. One declaring two would be admissible by the manager of
-     *      either and usable as the other, which routes around the split between manager roles.
-     *
-     *      The caller must hold the manager role for the category each protocol declares, checked per
-     *      protocol — so a batch spanning categories needs a caller holding all of them.
-     *
-     *      Re-registering a deprecated protocol clears its deprecation.
-     * @param protocolAddresses The addresses of the protocols. Zero addresses are skipped.
-     */
-    function addProtocols(address[] memory protocolAddresses) external;
-
-    /**
-     * @notice Deprecate protocols.
-     * @dev A deprecated protocol is only good for getting OUT — existing positions can still be
-     *      withdrawn or unstaked, but nothing new may enter it. It leaves the registered set and is
-     *      remembered as deprecated, which is why this is not the same as removal.
-     *
-     *      Authority comes from the category recorded at registration, not a fresh probe of the
-     *      protocol: this is the lever you reach for when a protocol has misbehaved, and it must not
-     *      stop working because that protocol stopped answering.
-     * @param protocolAddresses The addresses of the protocols. Ones that were never registered are
-     *        skipped rather than marked, so this is not a way to record an unknown address.
+     * @notice Deprecate protocols from Bitty.
+     * @dev Deprecate protocols from Bitty.
+     * @param protocolAddresses The addresses of the protocols.
      */
     function deprecateProtocols(address[] memory protocolAddresses) external;
 
@@ -113,30 +90,7 @@ interface IBittyV1Guard {
      *      never registered. Recorded at registration rather than re-derived, so reading it costs a
      *      storage load instead of an ERC-165 probe.
      * @param protocolAddress The address of the protocol.
-     * @return bytes4 The category interface id, or 0.
+     * @return uint8 The category interface id, or 0.
      */
-    function protocolCategory(address protocolAddress) external view returns (bytes4);
-
-    /**
-     * @notice Every ACTIVE protocol — registered and not deprecated, across all categories.
-     * @dev Deprecated entries are absent because a user should not be offered a protocol they can
-     *      only exit; {isProtocolDeprecated} still answers for a position someone already holds.
-     *      Callers wanting one category filter on {protocolCategory}.
-     * @return addresses The active protocols.
-     */
-    function getProtocols() external view returns (address[] memory addresses);
-
-    /**
-     * @notice Get the registered assets.
-     * @dev Get the registered assets.
-     * @return addresses The addresses of the registered assets.
-     */
-    function getAssets() external view returns (address[] memory addresses);
-
-    /**
-     * @notice Get the registered stable coins.
-     * @dev Get the registered stable coins.
-     * @return addresses The addresses of the registered stable coins.
-     */
-    function getStableCoins() external view returns (address[] memory addresses);
+    function protocolCategory(address protocolAddress) external view returns (uint8);
 }

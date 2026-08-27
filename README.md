@@ -2,36 +2,46 @@
 
 On-chain registry of allowed assets and DeFi protocols for [Bitty](https://github.com/BittyIO) vaults. The guard is the source of truth for what tokens vaults may hold and which external protocols they may interact with.
 
-Deployed at the same address on every supported chain via CREATE2:
-
 | Chain   | Address |
 |---------|---------|
 | Mainnet | [`0x00D4000023b177003fb1bF1d3160BaefF5c60000`](https://etherscan.io/address/0x00D4000023b177003fb1bF1d3160BaefF5c60000) |
 | Base    | [`0x00D4000023b177003fb1bF1d3160BaefF5c60000`](https://basescan.org/address/0x00D4000023b177003fb1bF1d3160BaefF5c60000) |
-| Sepolia | [`0x00D4000023b177003fb1bF1d3160BaefF5c60000`](https://sepolia.etherscan.io/address/0x00D4000023b177003fb1bF1d3160BaefF5c60000) |
+| Sepolia | [`0xe70496E000AF00003a000067b0aF7E0000ddbdaF`](https://sepolia.etherscan.io/address/0xe70496E000AF00003a000067b0aF7E0000ddbdaF) |
+
+Mainnet and Base share the same CREATE2 address. Sepolia was deployed against a different init-code hash and therefore landed elsewhere.
 
 ## Overview
 
-`BittyV1Guard` maintains three registries:
+`BittyV1Guard` maintains two registries:
 
 | Registry | Lifecycle | Effect |
 |----------|-----------|--------|
 | **Assets** | Add / remove | Removed assets can only be sold, not bought |
-| **Stable coins** | Add / remove | Removed stable coins can only be sold, not bought |
 | **Protocols** | Add / deprecate | Deprecated protocols are exit-only — existing positions can be withdrawn, but no new deposits |
 
-Protocol categories are not passed in by the caller. Each protocol declares exactly one Bitty category via [ERC-165](https://eips.ethereum.org/EIPS/eip-165) at registration time; the guard records that declaration in `protocolCategory` and enforces the matching manager role. A protocol that declares zero or more than one category is rejected.
+There is no separate stable-coin registry. A stable coin is an asset registered with the stable-coin category; callers distinguish token types by reading `assetCategory`.
 
-### Protocol categories
+Both registries store a `uint8` category per entry, supplied by the caller at registration time. The guard rejects category `0` (treated as "skip this entry") and does not interpret any other value — meaning is a convention shared with vaults and other consumers. Category `0` on read means the address was never registered.
 
-| Category | Interface ID | Manager role | Deprecated behavior |
-|----------|--------------|--------------|---------------------|
-| Lending | `0xb9f16a0c` | `LENDING_MANAGER_ROLE` | Withdraw-only |
-| Staking | `0xc8ada217` | `STAKING_MANAGER_ROLE` | Unstake-only |
-| AMM | `0x932722bd` | `AMM_MANAGER_ROLE` | Remove LP only |
-| Intent | `0x1626ba7e` | `INTENT_MANAGER_ROLE` | Cancel trades only |
+### Category conventions
 
-Interface IDs are pinned here and in [protocol-store](https://github.com/BittyIO/protocol-store) (`InterfaceIds.t.sol`). Change them in both repos together.
+Asset and protocol categories are independent namespaces (the same number can mean different things in each registry).
+
+**Assets** (as used in deploy scripts):
+
+| Value | Meaning |
+|-------|---------|
+| `1` | Stable coin |
+| `2` | Crypto |
+
+**Protocols** (as used in tests; vault-side convention):
+
+| Value | Meaning |
+|-------|---------|
+| `1` | Lending |
+| `2` | Staking |
+| `3` | AMM |
+| `4` | Intent |
 
 ## Access control
 
@@ -41,13 +51,11 @@ Administration uses OpenZeppelin `AccessControlDefaultAdminRules` with a 7-day d
 |------|-------|
 | `DEFAULT_ADMIN_ROLE` | Role grants, initialization |
 | `ASSET_MANAGER_ROLE` | Asset registry |
-| `STABLE_COIN_MANAGER_ROLE` | Stable coin registry |
-| `LENDING_MANAGER_ROLE` | Lending protocol registration / deprecation |
-| `STAKING_MANAGER_ROLE` | Staking protocol registration / deprecation |
-| `AMM_MANAGER_ROLE` | AMM protocol registration / deprecation |
-| `INTENT_MANAGER_ROLE` | Intent protocol registration / deprecation |
+| `PROTOCOL_MANAGER_ROLE` | Protocol registration / deprecation, all protocol categories |
 
-Each category has its own manager so operations can be split across addresses. `addProtocols` checks the caller holds the role for each protocol's declared category; a batch spanning multiple categories requires every relevant role.
+Two roles, one per registry: what a vault may **hold**, and what it may **use**.
+
+A holder of `PROTOCOL_MANAGER_ROLE` can register any protocol category. Per-category manager roles existed in an earlier design; if separate custody is needed again, that would mean restoring per-category roles rather than hiding checks inside the current ones.
 
 ## Deployment
 
@@ -123,27 +131,49 @@ Solidity `0.8.34`, optimizer enabled (`runs = 10000`, `via_ir = true`).
 ## Key API
 
 ```solidity
-// Assets & stable coins
-function addAssets(address[] calldata) external;
+// One-time setup after deploy
+function initialize(
+    address[] calldata assets,
+    uint8[] calldata assetCategories,
+    address[] calldata protocols,
+    uint8[] calldata protocolCategories
+) external;
+
+// Assets — every asset carries a category; stable coins use category 1
+function addAssets(address[] calldata, uint8[] calldata categories) external;
 function removeAssets(address[] calldata) external;
 function isAssetRegistered(address) external view returns (bool);
+function assetCategory(address) external view returns (uint8);
 
-function addStableCoins(address[] calldata) external;
-function removeStableCoins(address[] calldata) external;
-function isStableCoinRegistered(address) external view returns (bool);
-
-// Protocols — category is discovered via ERC-165, not supplied by caller
-function addProtocols(address[] calldata) external;
+// Protocols — category is supplied by the caller and recorded
+function addProtocols(address[] calldata, uint8[] calldata categories) external;
 function deprecateProtocols(address[] calldata) external;
 function isProtocolRegistered(address) external view returns (bool);
 function isProtocolDeprecated(address) external view returns (bool);
-function protocolCategory(address) external view returns (bytes4);
+function protocolCategory(address) external view returns (uint8);
 
-// Bulk reads
-function getAssets() external view returns (address[] memory);
-function getStableCoins() external view returns (address[] memory);
-function getProtocols() external view returns (address[] memory); // active only
+// Events — the only enumeration mechanism
+event AssetAdded(address indexed assetAddress, uint8 indexed category);
+event AssetRemoved(address indexed assetAddress);
+event ProtocolAdded(address indexed protocolAddress, uint8 indexed category);
+event ProtocolDeprecated(address indexed protocolAddress);
 ```
+
+### Errors
+
+| Error | When |
+|-------|------|
+| `NotDeployer()` | Constructor called with `tx.origin != DEPLOYER` |
+| `LengthMismatch()` | Address and category arrays differ in length |
+| `NotRegisteredProtocol(address)` | `deprecateProtocols` targets an address that is not registered |
+
+### Design notes
+
+**No bulk reads.** Membership is stored in `mapping(address => bool)`, so the guard answers "is this registered?" in one `SLOAD` but cannot return all members. Consumers that need the full set replay the events above from the deployment block and apply adds/removes in order. Events fire only on actual state changes, so a replay never double-counts.
+
+**Re-adding.** Registering an asset or protocol that is already active with the same category is a no-op (no event). Re-registering a deprecated protocol clears its deprecation flag.
+
+**Stable coins.** There is no `isStableCoinRegistered` — check `isAssetRegistered(token) && assetCategory(token) == 1` (or whatever stable-coin category your deployment uses).
 
 See [`IBittyV1Guard.sol`](src/interfaces/IBittyV1Guard.sol) for full NatSpec.
 

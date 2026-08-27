@@ -18,7 +18,10 @@ interface ImmutableCreate2Factory {
 contract Deploy is DeployScript {
     ImmutableCreate2Factory immutable factory = ImmutableCreate2Factory(0x0000000000FFe8B47B3e2130213B802212439497);
 
-    bytes32 salt = 0x12ee2de7bf086388b1d560eb95e7191edfab98236fbb93574cf1e0001f15ca91;
+    uint8 internal constant STABLE_COIN_CATEGORY = 1;
+    uint8 internal constant CRYPTO_CATEGORY = 2;
+
+    bytes32 salt = 0x12ee2de7bf086388b1d560eb95e7191edfab9823addba4eeda01a000b0223d82;
 
     function deploy() public override {
         bytes memory initCode = type(BittyV1Guard).creationCode;
@@ -26,19 +29,22 @@ contract Deploy is DeployScript {
         address bittyGuardAddress = factory.safeCreate2(salt, initCode);
         BittyV1Guard bittyGuard = BittyV1Guard(bittyGuardAddress);
 
-        address[] memory assets = new address[](4);
+        address[] memory assets = new address[](6);
+        uint8[] memory assetCategories = new uint8[](6);
         assets[0] = getAddress("WETH");
+        assetCategories[0] = CRYPTO_CATEGORY;
         assets[1] = getAddress("WETH_AAVE");
+        assetCategories[1] = CRYPTO_CATEGORY;
         assets[2] = getAddress("WETH_UNI");
+        assetCategories[2] = CRYPTO_CATEGORY;
         assets[3] = getAddress("WBTC");
+        assetCategories[3] = CRYPTO_CATEGORY;
+        assets[4] = getAddress("USDT");
+        assetCategories[4] = STABLE_COIN_CATEGORY;
+        assets[5] = getAddress("USDC");
+        assetCategories[5] = STABLE_COIN_CATEGORY;
 
-        address[] memory stableCoins = new address[](2);
-        stableCoins[0] = getAddress("USDT");
-        stableCoins[1] = getAddress("USDC");
-
-        bittyGuard.initialize(
-            assets, stableCoins, new address[](0), new address[](0), new address[](0), new address[](0)
-        );
+        bittyGuard.initialize(assets, assetCategories, new address[](0), new uint8[](0));
 
         console2.log("BittyV1Guard deployed at", address(bittyGuard));
 
