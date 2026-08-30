@@ -16,6 +16,8 @@ interface IBittyV1Guard {
     event AssetRemoved(address indexed assetAddress);
     event ProtocolAdded(address indexed protocolAddress, uint8 indexed category);
     event ProtocolDeprecated(address indexed protocolAddress);
+    event ImplementationRegistered(address indexed implementation);
+    event ImplementationUnregistered(address indexed implementation);
 
     /**
      * @notice Add registered assets to Bitty.
@@ -111,4 +113,26 @@ interface IBittyV1Guard {
      * @return uint8 The category interface id, or 0.
      */
     function protocolCategory(address protocolAddress) external view returns (uint8);
+
+    /**
+     * @notice Register implementations.
+     * @dev Register implementations.
+     * @param implementations The addresses of the implementations.
+     */
+    function registerImplementations(address[] memory implementations) external;
+
+    /**
+     * @notice Revoke previously blessed vault implementations.
+     * @dev Existing vaults already running an unregistered implementation are unaffected — this only
+     *      stops it being a future upgrade target.
+     * @param implementations The vault implementation addresses to revoke.
+     */
+    function unregisterImplementations(address[] memory implementations) external;
+
+    /**
+     * @notice Is this a blessed vault implementation?
+     * @param implementation The implementation address.
+     * @return bool True if registered as a valid upgrade target.
+     */
+    function isImplementationRegistered(address implementation) external view returns (bool);
 }

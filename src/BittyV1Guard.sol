@@ -19,6 +19,7 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
 
     bytes32 public constant ASSET_MANAGER_ROLE = keccak256("ASSET_MANAGER_ROLE");
     bytes32 public constant PROTOCOL_MANAGER_ROLE = keccak256("PROTOCOL_MANAGER_ROLE");
+    bytes32 public constant IMPLEMENTATION_MANAGER_ROLE = keccak256("IMPLEMENTATION_MANAGER_ROLE");
 
     EnumerableSet.AddressSet internal _protocols;
 
@@ -30,12 +31,15 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
 
     mapping(address => uint8) public assetCategory;
 
+    mapping(address => bool) internal _registeredImplementations;
+
     address public constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
 
     constructor() AccessControlDefaultAdminRules(DEFAULT_ADMIN_TRANSFER_DELAY, DEPLOYER) {
         if (tx.origin != DEPLOYER) revert NotDeployer();
         _grantRole(ASSET_MANAGER_ROLE, DEPLOYER);
         _grantRole(PROTOCOL_MANAGER_ROLE, DEPLOYER);
+        _grantRole(IMPLEMENTATION_MANAGER_ROLE, DEPLOYER);
     }
 
     function initialize(
@@ -141,5 +145,38 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
 
     function isProtocolDeprecated(address protocolAddress) external view override returns (bool) {
         return _deprecatedProtocols.contains(protocolAddress);
+    }
+
+    function registerImplementations(address[] memory implementations)
+        external
+        override
+        onlyRole(IMPLEMENTATION_MANAGER_ROLE)
+    {
+        for (uint256 i = 0; i < implementations.length; i++) {
+            address implementation = implementations[i];
+            if (implementation == address(0) || _registeredImplementations[implementation]) {
+                continue;
+            }
+            _registeredImplementations[implementation] = true;
+            emit ImplementationRegistered(implementation);
+        }
+    }
+
+    function unregisterImplementations(address[] memory implementations)
+        external
+        override
+        onlyRole(IMPLEMENTATION_MANAGER_ROLE)
+    {
+        for (uint256 i = 0; i < implementations.length; i++) {
+            address implementation = implementations[i];
+            if (_registeredImplementations[implementation]) {
+                _registeredImplementations[implementation] = false;
+                emit ImplementationUnregistered(implementation);
+            }
+        }
+    }
+
+    function isImplementationRegistered(address implementation) external view override returns (bool) {
+        return _registeredImplementations[implementation];
     }
 }
