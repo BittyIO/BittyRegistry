@@ -1,6 +1,6 @@
 # Bitty Guard
 
-On-chain registry of allowed assets and DeFi protocols for [Bitty](https://github.com/BittyIO) vaults. The guard is the source of truth for what tokens vaults may hold and which external protocols they may interact with.
+On-chain registry of allowed assets, DeFi protocols, and vault implementations for [Bitty](https://github.com/BittyIO) vaults. The guard is the source of truth for what tokens vaults may hold, which external protocols they may interact with, and which implementations they may upgrade to.
 
 | Chain   | Address |
 |---------|---------|
@@ -12,14 +12,17 @@ Mainnet and Base share the same CREATE2 address. Sepolia was deployed against a 
 
 ## Overview
 
-`BittyV1Guard` maintains two registries:
+`BittyV1Guard` maintains three registries:
 
 | Registry | Lifecycle | Effect |
 |----------|-----------|--------|
 | **Assets** | Add / remove | Removed assets can only be sold, not bought |
 | **Protocols** | Add / deprecate | Deprecated protocols are exit-only — existing positions can be withdrawn, but no new deposits |
+| **Implementations** | Register / unregister | A vault may only UUPS-upgrade to a registered implementation; unregistering blocks it as a *future* target but does not affect vaults already running it |
 
 There is no separate stable-coin registry. A stable coin is an asset registered with the stable-coin category; callers distinguish token types by reading `assetCategory`.
+
+The implementation registry is what makes vault upgrades governance-gated: each vault's `_authorizeUpgrade` reads `isImplementationRegistered(newImpl)`, so no vault can upgrade to code the guard has not blessed. Registration here is immediate — the upgrade **delay** lives in governance (the `IMPLEMENTATION_MANAGER_ROLE` holder is a `TimelockController`), not in this contract.
 
 Both registries store a `uint8` category per entry, supplied by the caller at registration time. The guard rejects category `0` (treated as "skip this entry") and does not interpret any other value — meaning is a convention shared with vaults and other consumers. Category `0` on read means the address was never registered.
 
@@ -52,10 +55,13 @@ Administration uses OpenZeppelin `AccessControlDefaultAdminRules` with a 7-day d
 | `DEFAULT_ADMIN_ROLE` | Role grants, initialization |
 | `ASSET_MANAGER_ROLE` | Asset registry |
 | `PROTOCOL_MANAGER_ROLE` | Protocol registration / deprecation, all protocol categories |
+| `IMPLEMENTATION_MANAGER_ROLE` | Implementation registry (register / unregister vault upgrade targets) |
 
-Two roles, one per registry: what a vault may **hold**, and what it may **use**.
+One role per registry: what a vault may **hold**, what it may **use**, and what it may **upgrade to**.
 
 A holder of `PROTOCOL_MANAGER_ROLE` can register any protocol category. Per-category manager roles existed in an earlier design; if separate custody is needed again, that would mean restoring per-category roles rather than hiding checks inside the current ones.
+
+`IMPLEMENTATION_MANAGER_ROLE` is kept **deliberately separate** from the asset/protocol roles because blessing an implementation is the highest-blast-radius privilege — every vault can upgrade to it, so a bad entry can drain them all. It is meant to be held by a governance `TimelockController`, giving upgrades a delay while asset/protocol management stays fast and operational. At deploy the constructor grants all three roles to `DEPLOYER` as a launch bootstrap (so it can register the first implementation before governance is stood up); the intended hand-off is to **revoke `IMPLEMENTATION_MANAGER_ROLE` from the deployer and grant it to the timelock** once governance is live. `DEFAULT_ADMIN_ROLE` can perform that grant/revoke at any time.
 
 ## Deployment
 
@@ -152,11 +158,18 @@ function isProtocolRegistered(address) external view returns (bool);
 function isProtocolDeprecated(address) external view returns (bool);
 function protocolCategory(address) external view returns (uint8);
 
+// Implementations — vault UUPS upgrade targets (IMPLEMENTATION_MANAGER_ROLE)
+function registerImplementations(address[] calldata) external;
+function unregisterImplementations(address[] calldata) external;
+function isImplementationRegistered(address) external view returns (bool);
+
 // Events — the only enumeration mechanism
 event AssetAdded(address indexed assetAddress, uint8 indexed category);
 event AssetRemoved(address indexed assetAddress);
 event ProtocolAdded(address indexed protocolAddress, uint8 indexed category);
 event ProtocolDeprecated(address indexed protocolAddress);
+event ImplementationRegistered(address indexed implementation);
+event ImplementationUnregistered(address indexed implementation);
 ```
 
 ### Errors
@@ -174,6 +187,8 @@ event ProtocolDeprecated(address indexed protocolAddress);
 **Re-adding.** Registering an asset or protocol that is already active with the same category is a no-op (no event). Re-registering a deprecated protocol clears its deprecation flag.
 
 **Stable coins.** There is no `isStableCoinRegistered` — check `isAssetRegistered(token) && assetCategory(token) == 1` (or whatever stable-coin category your deployment uses).
+
+**Implementations.** Like the other registries, membership is a `mapping(address => bool)` with `ImplementationRegistered` / `ImplementationUnregistered` events for replay; registering an already-registered impl (or unregistering an absent one) is a no-op. Unregistering only removes it as a *future* upgrade target — vaults already running it are untouched. The registry is intentionally minimal (no category, no timelock); the review delay is enforced by the governance `TimelockController` that holds `IMPLEMENTATION_MANAGER_ROLE`.
 
 See [`IBittyV1Guard.sol`](src/interfaces/IBittyV1Guard.sol) for full NatSpec.
 
@@ -194,7 +209,7 @@ deployments/
   base.toml
   sepolia.toml
 test/
-  local/BittyV1Guard.t.sol  # Unit tests
+  local/BittyV1Guard.t.sol  # Unit tests — asset / protocol / implementation registries
 ```
 
 ## License

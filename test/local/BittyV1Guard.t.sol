@@ -709,7 +709,6 @@ contract BittyV1GuardTest is Test {
     uint8 internal constant CRYPTO_CAT = 2;
     uint8 internal constant STABLE_CAT = 1;
 
-    /// @dev Same category for every entry; the tests care about membership, not the taxonomy.
     function _cats(uint256 n, uint8 category) internal pure returns (uint8[] memory out) {
         out = new uint8[](n);
         for (uint256 i = 0; i < n; i++) {
@@ -733,7 +732,6 @@ contract BittyV1GuardTest is Test {
         }
     }
 
-    /// @dev A stable coin is just an asset carrying STABLE_CAT, so membership is a category read.
     function _assertStableCoinsAre(address[] memory expected) internal view {
         for (uint256 i = 0; i < stableCoins.length; i++) {
             assertEq(_isStable(stableCoins[i]), _contains(expected, stableCoins[i]), "stable coin membership");
@@ -768,13 +766,6 @@ contract BittyV1GuardTest is Test {
         }
     }
 
-    /**
-     * @notice A deprecated protocol leaves {getProtocols} but stays in {getAllProtocols}.
-     * @dev The distinction is load-bearing, not cosmetic. Deprecation is exit-only: vaults keep
-     *      positions in the protocol, so a caller identifying those positions - recognising a
-     *      position NFT, say - must still be able to see it. Enumerating only the active set would
-     *      make a deprecated protocol's NFT indistinguishable from a stray token.
-     */
     function test_DeprecatedProtocolMovesFromActiveListToDeprecatedList() public {
         vm.startPrank(protocolOwner);
         bittyGuard.addProtocols(lendingProtocols, _cats(lendingProtocols.length, LENDING_ID));
@@ -797,7 +788,6 @@ contract BittyV1GuardTest is Test {
         assertTrue(found, "deprecated protocol missing from the deprecated list");
     }
 
-    /// @dev Deprecating twice is not a no-op that silently succeeds - the entry is already gone.
     function test_DeprecateTwiceReverts() public {
         vm.startPrank(protocolOwner);
         bittyGuard.addProtocols(lendingProtocols, _cats(lendingProtocols.length, LENDING_ID));
@@ -805,5 +795,73 @@ contract BittyV1GuardTest is Test {
         vm.expectRevert(abi.encodeWithSelector(NotRegisteredProtocol.selector, lendingProtocol));
         bittyGuard.deprecateProtocols(lendingProtocols);
         vm.stopPrank();
+    }
+
+    // ── implementation registry ─────────────────────────────────────────────
+    // The vault's upgrade model reads isImplementationRegistered in _authorizeUpgrade. Registration is
+    // immediate but gated on a DEDICATED IMPLEMENTATION_MANAGER_ROLE (not asset/protocol) — blessing an
+    // implementation lets every vault upgrade to it, the highest-blast-radius privilege. The role is
+    // granted to DEPLOYER at launch as a bootstrap; in production it is handed to a governance
+    // TimelockController, so the upgrade delay is enforced there, not in this contract.
+
+    function test_RegisterThenUnregisterImplementation() public {
+        address implManager = makeAddr("implManager"); // stands in for the governance timelock
+        bytes32 implRole = bittyGuard.IMPLEMENTATION_MANAGER_ROLE();
+        vm.prank(deployAdmin);
+        bittyGuard.grantRole(implRole, implManager);
+
+        address impl = makeAddr("impl");
+        assertFalse(bittyGuard.isImplementationRegistered(impl), "unknown impl");
+
+        vm.prank(implManager);
+        bittyGuard.registerImplementations(_one(impl));
+        assertTrue(bittyGuard.isImplementationRegistered(impl), "registered");
+
+        vm.prank(implManager);
+        bittyGuard.unregisterImplementations(_one(impl));
+        assertFalse(bittyGuard.isImplementationRegistered(impl), "unregistered");
+    }
+
+    function test_DeployerCanRegisterImplementationAtLaunch() public {
+        assertTrue(bittyGuard.hasRole(bittyGuard.IMPLEMENTATION_MANAGER_ROLE(), deployAdmin), "deployer bootstrapped");
+        address impl = makeAddr("impl");
+        vm.prank(deployAdmin);
+        bittyGuard.registerImplementations(_one(impl));
+        assertTrue(bittyGuard.isImplementationRegistered(impl), "registered by deployer");
+    }
+
+    function test_ProtocolManagerCannotRegisterImplementation() public {
+        // protocolOwner holds PROTOCOL_MANAGER_ROLE but not IMPLEMENTATION_MANAGER_ROLE: the roles stay
+        // isolated even though the deployer happens to hold all three.
+        assertTrue(bittyGuard.hasRole(bittyGuard.PROTOCOL_MANAGER_ROLE(), protocolOwner), "is protocol manager");
+        assertFalse(bittyGuard.hasRole(bittyGuard.IMPLEMENTATION_MANAGER_ROLE(), protocolOwner), "is not impl manager");
+        vm.prank(protocolOwner);
+        vm.expectRevert();
+        bittyGuard.registerImplementations(_one(makeAddr("impl")));
+    }
+
+    function test_StrangerCannotRegisterImplementation() public {
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert();
+        bittyGuard.registerImplementations(_one(makeAddr("impl")));
+    }
+
+    function test_RegisterImplementations_emitsOncePerNewEntry() public {
+        address impl = makeAddr("impl");
+        vm.expectEmit(true, false, false, true, address(bittyGuard));
+        emit IBittyV1Guard.ImplementationRegistered(impl);
+        vm.prank(deployAdmin);
+        bittyGuard.registerImplementations(_one(impl));
+
+        // Re-registering the same impl is a no-op — no event.
+        vm.recordLogs();
+        vm.prank(deployAdmin);
+        bittyGuard.registerImplementations(_one(impl));
+        assertEq(vm.getRecordedLogs().length, 0, "re-registering emitted a log");
+    }
+
+    function _one(address a) internal pure returns (address[] memory arr) {
+        arr = new address[](1);
+        arr[0] = a;
     }
 }
