@@ -4,13 +4,15 @@ On-chain registry of allowed assets, DeFi protocols, and account implementations
 
 | Chain   | Address |
 |---------|---------|
-| Mainnet | [`0x0000000300FBc66e003a60Bb635789709ce0Eadb`](https://etherscan.io/address/0x0000000300FBc66e003a60Bb635789709ce0Eadb) |
-| Base    | [`0x0000000300FBc66e003a60Bb635789709ce0Eadb`](https://basescan.org/address/0x0000000300FBc66e003a60Bb635789709ce0Eadb) |
-| Sepolia | [`0x0000000008889521Db10f4c1eb20eF49179b498C`](https://sepolia.etherscan.io/address/0x0000000008889521Db10f4c1eb20eF49179b498C) |
+| Mainnet | [`0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00`](https://etherscan.io/address/0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00) |
+| Base    | [`0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00`](https://basescan.org/address/0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00) |
+| Sepolia | [`0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00`](https://sepolia.etherscan.io/address/0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00) |
 
-Mainnet and Base share the same CREATE2 address. Sepolia was deployed against a different salt and therefore landed elsewhere.
+One address on every chain. Live on Sepolia; Mainnet and Base are not deployed yet and will land here when they are.
 
-These are **proxy** addresses. The guard is a UUPS proxy, so the address above is what vaults compile in and never changes; the implementation behind it does.
+**This is not a coincidence to be maintained by hand.** The proxy is born on a constant bootstrap implementation rather than on the current build (see [Deployment](#deployment)), so its init code — and therefore its CREATE2 address — is identical everywhere, at every version. A new chain reaches it by running the deploy script, with nothing to reproduce from an older commit.
+
+This is a **proxy** address. The guard is a UUPS proxy, so the address above is what vaults compile in and never changes; the implementation behind it does.
 
 ## Overview
 
@@ -41,9 +43,8 @@ The three category namespaces are independent — the same number means differen
 | `PROTOCOL_AMM` | `3` | Protocols |
 | `PROTOCOL_INTENT` | `4` | Protocols |
 | `IMPLEMENTATION_VAULT` | `1` | Implementations |
-| `IMPLEMENTATION_SUB_VAULT` | `2` | Implementations |
 
-Implementation categories are what keep a main vault from upgrading to sub-vault code, or the reverse — two contracts with incompatible storage layouts and authority models.
+Sub vaults have no category of their own. A sub vault is a beacon proxy whose beacon is its parent vault, so it runs the sub-vault build shipped with the parent's own — already guard-blessed — implementation, and follows the parent's upgrade automatically. There is nothing separate for the guard to bless. The registry itself stays generic over `category`, so a future account type can claim `2` without a contract change.
 
 ## Upgradeability
 
@@ -52,6 +53,7 @@ The guard is itself a UUPS proxy (`ERC1967Proxy` + `UUPSUpgradeable`). It has to
 - `_authorizeUpgrade` is gated on `DEFAULT_ADMIN_ROLE` — the strictest role, not the operational ones.
 - The implementation's constructor calls `_disableInitializers()`, so the logic contract cannot be initialized directly.
 - `initialize` is `initializer`-guarded and additionally requires `tx.origin == DEPLOYER`, which stops anyone front-running initialization of a freshly deployed proxy.
+- `guardVersion()` and `versionName()` report the build behind the proxy (`1.0.0`), encoded `major * 1e6 + minor * 1e3 + patch`. Reading it back is the cheapest confirmation that an upgrade actually landed.
 
 ## Access control
 
@@ -72,18 +74,25 @@ A holder of `PROTOCOL_MANAGER_ROLE` can register any protocol category. Per-cate
 
 ## Deployment
 
-Two contracts are deployed, by two different factories, on purpose:
+Three contracts are deployed, by two different factories, on purpose:
 
 | Contract | Factory | Salt | Constructor args |
 |----------|---------|------|------------------|
-| `BittyV1Guard` (implementation) | Arachnid deterministic-deployment-proxy `0x4e59b44847b379578588920cA78FbF26c0B4956C` | `bytes32(0)` | none |
-| `ERC1967Proxy` (the guard address) | [ImmutableCreate2Factory](https://github.com/ProjectOpenSea/seaport/blob/main/docs/ImmutableCreate2Factory.md) `0x0000000000FFe8B47B3e2130213B802212439497` | deployer-prefixed vanity salt | `(implementation, "")` |
+| `BittyV1GuardBootstrap` | Arachnid deterministic-deployment-proxy `0x4e59b44847b379578588920cA78FbF26c0B4956C` | `bytes32(0)` | none |
+| `BittyV1Guard` (implementation) | same | `bytes32(0)` | none |
+| `ERC1967Proxy` (the guard address) | [ImmutableCreate2Factory](https://github.com/ProjectOpenSea/seaport/blob/main/docs/ImmutableCreate2Factory.md) `0x0000000000FFe8B47B3e2130213B802212439497` | deployer-prefixed vanity salt | `(bootstrap, "")` |
 
-The vanity salt is spent on the **proxy**, since that is the address vaults name. `ImmutableCreate2Factory` enforces that the salt's leading 20 bytes equal the caller, so only the designated deployer can land the contract at the target address. The implementation goes through the plain CREATE2 deployer at salt `0`, which makes its address a pure function of its init code.
+The vanity salt is spent on the **proxy**, since that is the address vaults name. `ImmutableCreate2Factory` enforces that the salt's leading 20 bytes equal the caller, so only the designated deployer can land the contract at the target address. The other two go through the plain CREATE2 deployer at salt `0`, which makes each address a pure function of its init code.
+
+**The proxy is born on the bootstrap, not on the build.** A proxy's init code embeds its implementation, so a proxy pointed straight at `BittyV1Guard` would move to a new address on every guard release — and a second chain could only match the first by rebuilding the exact implementation that chain was born with, from the commit that produced it, forever. `BittyV1GuardBootstrap` is a permanent do-nothing implementation that takes the build out of the hash; the deploy script upgrades the proxy to the real `BittyV1Guard` in the same run. Its `_authorizeUpgrade` is gated on `tx.origin == DEPLOYER`, because the proxy address is reproducible on every chain and the window before the first upgrade would otherwise be open to anyone on a chain Bitty has not reached yet.
+
+The consequence to remember: **the proxy's constructor argument is the bootstrap address and stays that way forever**, including when verifying after an upgrade. It is never the current implementation.
 
 Only `tx.origin == DEPLOYER` (`0x12EE2de7BF086388B1D560eb95e7191Edfab9823`) may initialize the proxy.
 
-Both steps are idempotent — the scripts check for existing code before deploying, so a re-run of a partially finished deploy completes it rather than reverting.
+Every step is idempotent — create, upgrade and initialize are each skipped once done, so a re-run of a partially finished deploy completes it rather than reverting, and a re-run of a finished one reports that there is nothing left to do.
+
+The deploy itself lives in `script/DeployGuard.sol`, shared by the three chain scripts; a chain script states only which assets and protocols to register. The salt, the bootstrap and the factory address are deliberately in the shared file — three copies of the value that fixes a single cross-chain address is exactly what drifts.
 
 Per-chain token addresses and the guard address live in `deployments/*.toml`. Initial registry contents differ by chain — for example Base registers cbBTC rather than bridged WBTC because of liquidity depth.
 
@@ -114,7 +123,7 @@ The script logs the implementation address and the proxy init-code hash. Keep bo
 
 ## Verifying the contract
 
-Because the guard is a proxy, **two** contracts must be verified, and the proxy must additionally be linked to its implementation so explorers show the registry's real ABI. Verifying only one leaves the guard looking like an empty contract on Etherscan.
+Because the guard is a proxy, **three** contracts must be verified — the proxy, the implementation behind it, and the bootstrap it was born on — and the proxy must additionally be linked to its implementation so explorers show the registry's real ABI. Verifying only the proxy leaves the guard looking like an empty contract on Etherscan.
 
 Foundry reads `foundry.toml` for the compiler settings, so the `0.8.34` / `optimizer_runs = 10000` / `via_ir = true` triple is matched automatically. Getting any of those wrong is the usual cause of a bytecode mismatch.
 
@@ -129,7 +138,7 @@ export ETHERSCAN_API_KEY=...
 Read it out of the proxy's ERC-1967 slot rather than trusting a note — this is always the implementation actually in use:
 
 ```shell
-cast storage 0x0000000008889521Db10f4c1eb20eF49179b498C \
+cast storage 0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00 \
   0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc \
   --rpc-url sepolia
 ```
@@ -148,22 +157,34 @@ forge verify-contract \
   src/BittyV1Guard.sol:BittyV1Guard
 ```
 
-### 3. Verify the proxy
+### 3. Verify the bootstrap
 
-`ERC1967Proxy` comes from the OpenZeppelin submodule, so give its path inside `lib/`, and pass the constructor arguments it was deployed with — the implementation address and **empty** init data, since `initialize` is called in a separate transaction:
+No constructor arguments:
 
 ```shell
 forge verify-contract \
   --chain sepolia \
   --watch \
-  --constructor-args $(cast abi-encode "constructor(address,bytes)" <IMPLEMENTATION_ADDRESS> 0x) \
-  0x0000000008889521Db10f4c1eb20eF49179b498C \
+  0xCb43DEd835f57Be1732A320a8F26c78595cF609A \
+  src/BittyV1GuardBootstrap.sol:BittyV1GuardBootstrap
+```
+
+### 4. Verify the proxy
+
+`ERC1967Proxy` comes from the OpenZeppelin submodule, so give its path inside `lib/`, and pass the constructor arguments it was deployed with — the **bootstrap** address and **empty** init data, since `initialize` is called in a separate transaction:
+
+```shell
+forge verify-contract \
+  --chain sepolia \
+  --watch \
+  --constructor-args $(cast abi-encode "constructor(address,bytes)" 0xCb43DEd835f57Be1732A320a8F26c78595cF609A 0x) \
+  0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00 \
   lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy
 ```
 
-If the constructor arguments are wrong the verification fails with a bytecode mismatch, because they are appended to the deployed init code.
+Note the argument is the **bootstrap**, not the implementation from step 1. Passing the implementation is the natural mistake and fails with a bytecode mismatch, because constructor arguments are appended to the deployed init code. It stays the bootstrap after every upgrade.
 
-### 4. Link the proxy to its implementation
+### 5. Link the proxy to its implementation
 
 Verification alone does not make Etherscan render the guard's functions — the proxy's own ABI has none. Mark it as a proxy so the Read/Write tabs show the implementation's interface:
 
@@ -172,7 +193,7 @@ curl -X POST "https://api.etherscan.io/v2/api?chainid=11155111" \
   -d "module=contract" \
   -d "action=verifyproxycontract" \
   -d "apikey=$ETHERSCAN_API_KEY" \
-  -d "address=0x0000000008889521Db10f4c1eb20eF49179b498C" \
+  -d "address=0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00" \
   -d "expectedimplementation=<IMPLEMENTATION_ADDRESS>"
 ```
 
@@ -189,7 +210,7 @@ forge verify-contract --chain base    --watch <IMPL> src/BittyV1Guard.sol:BittyV
 
 ### Verifying at deploy time
 
-Adding `--verify` to the deploy command verifies both contracts as they are broadcast, which avoids step 1 entirely. It does **not** perform step 4:
+Adding `--verify` to the deploy command verifies the contracts as they are broadcast, which avoids step 1 entirely. It does **not** perform step 5:
 
 ```shell
 forge script script/BittyV1GuardSepolia.s.sol:Deploy --broadcast --verify -vvvv
@@ -202,14 +223,17 @@ forge script script/BittyV1GuardSepolia.s.sol:Deploy --broadcast --verify -vvvv
 cast source <IMPLEMENTATION_ADDRESS> --chain sepolia
 
 # Should answer through the proxy once linked
-cast call 0x0000000008889521Db10f4c1eb20eF49179b498C \
+cast call 0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00 \
   "isAssetRegistered(address)(bool)" 0x1c7d4b196cb0c7b01d743fbc6116a902379c7238 \
   --rpc-url sepolia
+
+# Should report the build actually running behind the proxy
+cast call 0x9FFd004eDd0eBE0F5B0000c0002e0200001d8D00 "versionName()(string)" --rpc-url sepolia
 ```
 
 ### After an upgrade
 
-An upgrade replaces the implementation but keeps the proxy address, so repeat steps **1, 2 and 4** — the proxy itself stays verified and does not need re-verifying.
+An upgrade replaces the implementation but keeps the proxy address, so repeat steps **1, 2 and 5** — the proxy and the bootstrap stay verified and do not need re-verifying. The proxy's constructor argument never changes, because it names the bootstrap rather than the build.
 
 ## Development
 
@@ -244,6 +268,10 @@ Solidity `0.8.34`, optimizer enabled (`runs = 10000`, `via_ir = true`).
 ## Key API
 
 ```solidity
+// Version of the build behind the proxy, encoded major * 1e6 + minor * 1e3 + patch
+function guardVersion() external pure returns (uint256);
+function versionName() external pure returns (string memory);
+
 // One-time setup, called on the proxy after deployment
 function initialize(
     address[] calldata assets,
@@ -287,7 +315,7 @@ event ImplementationUnregistered(address indexed implementation);
 
 | Error | When |
 |-------|------|
-| `NotDeployer()` | `initialize` called with `tx.origin != DEPLOYER` |
+| `NotDeployer()` | `initialize` called with `tx.origin != DEPLOYER`, or an upgrade off `BittyV1GuardBootstrap` attempted by anyone else |
 | `LengthMismatch()` | Address and category arrays differ in length |
 | `NotRegisteredProtocol(address)` | `deprecateProtocols` targets an address that is not registered |
 | `NotRegisteredImplementation(address)` | `retireImplementations` targets an address that is not a past implementation of that category |
@@ -310,11 +338,13 @@ See [`IBittyV1Guard.sol`](src/interfaces/IBittyV1Guard.sol) for full NatSpec.
 ```
 src/
   BittyV1Guard.sol          # Registry contract (UUPS implementation)
+  BittyV1GuardBootstrap.sol # Constant implementation the proxy is born on; fixes the guard address
   interfaces/
     IBittyV1Guard.sol       # Public interface, errors, category constants
 script/
-  BaseDeploy.sol            # Shared deploy harness (TOML config, address persistence)
-  BittyV1GuardMainnet.s.sol
+  BaseDeploy.sol            # Shared deploy harness (TOML config, address persistence, CREATE2)
+  DeployGuard.sol           # The deploy itself: salt, bootstrap, proxy, upgrade, initialize
+  BittyV1GuardMainnet.s.sol # Per chain: which assets and protocols to register, nothing else
   BittyV1GuardBase.s.sol
   BittyV1GuardSepolia.s.sol
 deployments/
