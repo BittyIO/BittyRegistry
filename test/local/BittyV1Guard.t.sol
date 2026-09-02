@@ -7,18 +7,21 @@ import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UU
 import "forge-std/console.sol";
 import {Test} from "lib/forge-std/src/Test.sol";
 import {BittyV1Guard} from "../../src/BittyV1Guard.sol";
+import {BittyV1GuardBootstrap} from "../../src/BittyV1GuardBootstrap.sol";
 import {
     IBittyV1Guard,
     NotDeployer,
     LengthMismatch,
     NotRegisteredProtocol,
     IMPLEMENTATION_VAULT,
-    IMPLEMENTATION_SUB_VAULT,
     NotRegisteredImplementation
 } from "../../src/interfaces/IBittyV1Guard.sol";
 import {MockERC20} from "lib/solmate/src/test/utils/mocks/MockERC20.sol";
 
 contract BittyV1GuardTest is Test {
+    // The registry is generic over category; this stands in for any second one.
+    uint8 internal constant OTHER_CATEGORY = 2;
+
     uint8 internal constant LENDING_ID = 1;
     uint8 internal constant STAKING_ID = 2;
     uint8 internal constant AMM_ID = 3;
@@ -44,18 +47,12 @@ contract BittyV1GuardTest is Test {
 
     /// Deploys the guard the way production does: an implementation behind an ERC-1967 proxy, with
     /// the roles granted by initialize() rather than by a constructor the proxy never runs.
+    /// Mirrors the deploy script: the proxy is born on the bootstrap and moved to the real build, so
+    /// the tests exercise the path the chains actually take rather than a shortcut of their own.
     function _deployGuard() internal returns (BittyV1Guard g) {
-        BittyV1Guard impl = new BittyV1Guard();
-        g = BittyV1Guard(
-            address(
-                new ERC1967Proxy(
-                    address(impl),
-                    abi.encodeCall(
-                        BittyV1Guard.initialize, (new address[](0), new uint8[](0), new address[](0), new uint8[](0))
-                    )
-                )
-            )
-        );
+        g = BittyV1Guard(address(new ERC1967Proxy(address(new BittyV1GuardBootstrap()), "")));
+        UUPSUpgradeable(address(g)).upgradeToAndCall(address(new BittyV1Guard()), "");
+        g.initialize(new address[](0), new uint8[](0), new address[](0), new uint8[](0));
     }
 
     function setUp() public {
@@ -129,6 +126,11 @@ contract BittyV1GuardTest is Test {
 
     /// Upgrading the guard is the highest privilege in the system: default admin only.
     function test_OnlyAdminCanUpgradeTheGuard() public {
+        vm.startPrank(protocolOwner);
+        bittyGuard.addAssets(assets, _cats(assets.length, CRYPTO_CAT));
+        bittyGuard.addProtocols(ammProtocols, _cats(ammProtocols.length, AMM_ID));
+        vm.stopPrank();
+
         BittyV1Guard next = new BittyV1Guard();
         vm.prank(makeAddr("stranger"));
         vm.expectRevert();
@@ -138,6 +140,11 @@ contract BittyV1GuardTest is Test {
         UUPSUpgradeable(address(bittyGuard)).upgradeToAndCall(address(next), "");
         // State survives: the proxy kept its storage, so the roles granted in setUp are still there.
         assertTrue(bittyGuard.hasRole(bittyGuard.ASSET_MANAGER_ROLE(), protocolOwner), "roles survived");
+        // And so do the registries, which is what a live upgrade actually risks - every deployed vault
+        // reads them on every trade, so losing one would brick the fleet rather than just the guard.
+        assertTrue(bittyGuard.isAssetRegistered(assets[0]), "assets survived");
+        assertTrue(bittyGuard.isProtocolRegistered(ammProtocol), "protocols survived");
+        assertEq(bittyGuard.versionName(), "1.0.0", "and the new code is the code answering");
     }
 
     function test_AddRegisteredAssets() public {
@@ -765,19 +772,43 @@ contract BittyV1GuardTest is Test {
      * seed data and one mined salt lands on the same address on every chain.
      */
     function test_GetBittyV1GuardProxyInitCode() public pure {
-        address impl = address(
+        // The BOOTSTRAP, not the guard build: that is the whole point of the bootstrap, and mining
+        // against the build would pin the guard's address to one version and one chain.
+        address bootstrap = address(
             uint160(
                 uint256(
                     keccak256(
                         abi.encodePacked(
-                            bytes1(0xff), SIMPLE_CREATE2, bytes32(0), keccak256(type(BittyV1Guard).creationCode)
+                            bytes1(0xff),
+                            SIMPLE_CREATE2,
+                            bytes32(0),
+                            keccak256(type(BittyV1GuardBootstrap).creationCode)
                         )
                     )
                 )
             )
         );
         console.log("PROXY INIT_CODE_HASH (mine the guard salt against this)");
-        console.logBytes32(keccak256(abi.encodePacked(type(ERC1967Proxy).creationCode, abi.encode(impl, bytes("")))));
+        console.logBytes32(
+            keccak256(abi.encodePacked(type(ERC1967Proxy).creationCode, abi.encode(bootstrap, bytes(""))))
+        );
+    }
+
+    /// The proxy address is reproducible on every chain, so the window before the first upgrade is
+    /// reachable by anyone on a chain Bitty has not deployed to yet. Only the deployer may close it.
+    function test_OnlyDeployerMayUpgradeOffTheBootstrap() public {
+        address proxy = address(new ERC1967Proxy(address(new BittyV1GuardBootstrap()), ""));
+        // Deployed up front: a `new` in the argument list is itself a call, and would eat the prank.
+        address build = address(new BittyV1Guard());
+        address stranger = makeAddr("stranger");
+
+        vm.prank(stranger, stranger);
+        vm.expectRevert(NotDeployer.selector);
+        UUPSUpgradeable(proxy).upgradeToAndCall(build, "");
+
+        vm.prank(deployAdmin, deployAdmin);
+        UUPSUpgradeable(proxy).upgradeToAndCall(build, "");
+        assertEq(BittyV1Guard(proxy).versionName(), "1.0.0", "the real build is live");
     }
 
     function _addProtocols(address[] memory protocols, uint8 category) internal {
@@ -944,11 +975,12 @@ contract BittyV1GuardTest is Test {
         address subImpl = makeAddr("subImpl");
         vm.startPrank(deployAdmin);
         bittyGuard.setImplementation(vaultImpl, IMPLEMENTATION_VAULT);
-        bittyGuard.setImplementation(subImpl, IMPLEMENTATION_SUB_VAULT);
+        bittyGuard.setImplementation(subImpl, OTHER_CATEGORY);
         vm.stopPrank();
 
         assertFalse(
-            bittyGuard.isImplementationRegisteredFor(vaultImpl, IMPLEMENTATION_SUB_VAULT), "vault code is not sub code"
+            bittyGuard.isImplementationRegisteredFor(vaultImpl, OTHER_CATEGORY),
+            "vault code is not the other category's code"
         );
         assertFalse(
             bittyGuard.isImplementationRegisteredFor(subImpl, IMPLEMENTATION_VAULT), "sub code is not vault code"
@@ -1019,7 +1051,7 @@ contract BittyV1GuardTest is Test {
         bittyGuard.setImplementation(a, IMPLEMENTATION_VAULT);
         bittyGuard.setImplementation(b, IMPLEMENTATION_VAULT); // a is now past, for VAULT only
         vm.expectRevert(abi.encodeWithSelector(NotRegisteredImplementation.selector, a));
-        bittyGuard.retireImplementations(_one(a), IMPLEMENTATION_SUB_VAULT);
+        bittyGuard.retireImplementations(_one(a), OTHER_CATEGORY);
         vm.stopPrank();
         assertTrue(bittyGuard.isImplementationRegisteredFor(a, IMPLEMENTATION_VAULT), "untouched");
     }

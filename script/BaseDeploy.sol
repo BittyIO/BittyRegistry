@@ -24,6 +24,24 @@ abstract contract DeployScript is Script, Config {
         deploy(vm.getChain(block.chainid).name);
     }
 
+    address internal constant SIMPLE_CREATE2 = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
+
+    /**
+     * @dev CREATE2 through the standard deployer at salt 0: the same address on every chain for the
+     *      same bytecode, and idempotent - a re-run finds the code already there and returns it rather
+     *      than reverting, so a half-finished deploy can simply be run again.
+     */
+    function deployAtSaltZero(bytes memory code) internal returns (address deployed) {
+        deployed = create2Address(SIMPLE_CREATE2, bytes32(0), code);
+        if (deployed.code.length > 0) return deployed;
+        (bool ok, bytes memory ret) = SIMPLE_CREATE2.call(abi.encodePacked(bytes32(0), code));
+        require(ok && ret.length == 20 && address(bytes20(ret)) == deployed, "CREATE2 at salt 0 failed");
+    }
+
+    function create2Address(address deployer, bytes32 salt, bytes memory code) internal pure returns (address) {
+        return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), deployer, salt, keccak256(code))))));
+    }
+
     function getAddress(string memory key) public view returns (address) {
         address value = config.get(key).toAddress();
         require(value != address(0), string.concat("Address for key ", key, " not found"));

@@ -15,6 +15,7 @@ import {
     AddressZero
 } from "./interfaces/IBittyV1Guard.sol";
 import {EnumerableSet} from "openzeppelin-contracts/contracts/utils/structs/EnumerableSet.sol";
+import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
 
 /**
  * @title BittyV1Guard
@@ -22,6 +23,8 @@ import {EnumerableSet} from "openzeppelin-contracts/contracts/utils/structs/Enum
  */
 contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeable {
     using EnumerableSet for EnumerableSet.AddressSet;
+
+    uint256 private constant _VERSION = 1 * 1_000_000 + 0 * 1_000 + 0;
 
     uint48 internal constant DEFAULT_ADMIN_TRANSFER_DELAY = 7 days;
 
@@ -66,6 +69,20 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
     }
 
     function _authorizeUpgrade(address) internal view override onlyRole(DEFAULT_ADMIN_ROLE) {}
+
+    function guardVersion() external pure override returns (uint256) {
+        return _VERSION;
+    }
+
+    function versionName() external pure override returns (string memory) {
+        return string.concat(
+            Strings.toString(_VERSION / 1_000_000),
+            ".",
+            Strings.toString((_VERSION / 1_000) % 1_000),
+            ".",
+            Strings.toString(_VERSION % 1_000)
+        );
+    }
 
     function addAssets(address[] memory assetAddresses, uint8[] memory categories)
         external

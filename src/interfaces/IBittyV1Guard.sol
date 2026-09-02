@@ -17,7 +17,6 @@ uint8 constant PROTOCOL_AMM = 3;
 uint8 constant PROTOCOL_INTENT = 4;
 
 uint8 constant IMPLEMENTATION_VAULT = 1;
-uint8 constant IMPLEMENTATION_SUB_VAULT = 2;
 
 /**
  * @title Manage the registered assets and protocols (v1).
@@ -158,6 +157,18 @@ interface IBittyV1Guard {
      * @return addresses The past implementations.
      */
     function getPastImplementations(uint8 category) external view returns (address[] memory);
+
+    /**
+     * @notice This guard's version, encoded major * 1e6 + minor * 1e3 + patch.
+     * @return uint256 The version.
+     */
+    function guardVersion() external pure returns (uint256);
+
+    /**
+     * @notice This guard's version as "major.minor.patch".
+     * @return string The version name.
+     */
+    function versionName() external pure returns (string memory);
 
     /**
      * @notice Get the latest implementation for a category.
