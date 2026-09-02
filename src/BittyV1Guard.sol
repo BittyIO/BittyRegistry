@@ -5,7 +5,14 @@ import {Initializable} from "openzeppelin-contracts/contracts/proxy/utils/Initia
 import {
     AccessControlDefaultAdminRules
 } from "openzeppelin-contracts/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
-import {IBittyV1Guard, NotDeployer, LengthMismatch, NotRegisteredProtocol} from "./interfaces/IBittyV1Guard.sol";
+import {
+    IBittyV1Guard,
+    NotDeployer,
+    LengthMismatch,
+    NotRegisteredProtocol,
+    NotRegisteredImplementation,
+    AddressZero
+} from "./interfaces/IBittyV1Guard.sol";
 import {EnumerableSet} from "openzeppelin-contracts/contracts/utils/structs/EnumerableSet.sol";
 
 /**
@@ -31,7 +38,9 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
 
     mapping(address => uint8) public assetCategory;
 
-    mapping(address => bool) internal _registeredImplementations;
+    mapping(uint8 category => address) public latestImplementation;
+
+    mapping(uint8 category => EnumerableSet.AddressSet) internal _pastImplementations;
 
     address public constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
 
@@ -147,36 +156,45 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
         return _deprecatedProtocols.contains(protocolAddress);
     }
 
-    function registerImplementations(address[] memory implementations)
+    function setImplementation(address implementation, uint8 category)
+        external
+        override
+        onlyRole(IMPLEMENTATION_MANAGER_ROLE)
+    {
+        if (category == 0 || implementation == address(0)) revert AddressZero();
+        address current = latestImplementation[category];
+        if (current == implementation) return;
+        if (current != address(0)) _pastImplementations[category].add(current);
+        _pastImplementations[category].remove(implementation);
+        latestImplementation[category] = implementation;
+        emit ImplementationRegistered(implementation);
+    }
+
+    function retireImplementations(address[] memory implementations, uint8 category)
         external
         override
         onlyRole(IMPLEMENTATION_MANAGER_ROLE)
     {
         for (uint256 i = 0; i < implementations.length; i++) {
             address implementation = implementations[i];
-            if (implementation == address(0) || _registeredImplementations[implementation]) {
-                continue;
+            if (!_pastImplementations[category].remove(implementation)) {
+                revert NotRegisteredImplementation(implementation);
             }
-            _registeredImplementations[implementation] = true;
-            emit ImplementationRegistered(implementation);
+            emit ImplementationUnregistered(implementation);
         }
     }
 
-    function unregisterImplementations(address[] memory implementations)
+    function isImplementationRegisteredFor(address implementation, uint8 category)
         external
+        view
         override
-        onlyRole(IMPLEMENTATION_MANAGER_ROLE)
+        returns (bool)
     {
-        for (uint256 i = 0; i < implementations.length; i++) {
-            address implementation = implementations[i];
-            if (_registeredImplementations[implementation]) {
-                _registeredImplementations[implementation] = false;
-                emit ImplementationUnregistered(implementation);
-            }
-        }
+        return implementation == latestImplementation[category]
+            || _pastImplementations[category].contains(implementation);
     }
 
-    function isImplementationRegistered(address implementation) external view override returns (bool) {
-        return _registeredImplementations[implementation];
+    function getPastImplementations(uint8 category) external view override returns (address[] memory) {
+        return _pastImplementations[category].values();
     }
 }

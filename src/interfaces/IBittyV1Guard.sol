@@ -4,8 +4,20 @@ pragma solidity ^0.8.34;
 error NotDeployer();
 error LengthMismatch();
 error NotRegisteredProtocol(address protocolAddress);
+error NotRegisteredImplementation(address implementation);
 error CategoryZero();
-error NotRegisteredProtocolCategory(uint8 category);
+error AddressZero();
+
+uint8 constant ASSET_STABLE_COIN = 1;
+uint8 constant ASSET_CRYPTO = 2;
+
+uint8 constant PROTOCOL_LENDING = 1;
+uint8 constant PROTOCOL_STAKING = 2;
+uint8 constant PROTOCOL_AMM = 3;
+uint8 constant PROTOCOL_INTENT = 4;
+
+uint8 constant IMPLEMENTATION_VAULT = 1;
+uint8 constant IMPLEMENTATION_SUB_VAULT = 2;
 
 /**
  * @title Manage the registered assets and protocols (v1).
@@ -70,7 +82,7 @@ interface IBittyV1Guard {
      * @notice Is this protocol registered and not deprecated?
      * @dev Says nothing about WHICH category — read {protocolCategory} for that. The two questions
      *      are separate because callers ask them separately: the vault checks that a protocol is
-     *      permitted at all, then that it is the kind of protocol this particular call needs.
+     *      permitted at all, then that it is the category of protocol this particular call needs.
      * @param protocolAddress The address of the protocol.
      * @return bool True if registered.
      */
@@ -115,24 +127,43 @@ interface IBittyV1Guard {
     function protocolCategory(address protocolAddress) external view returns (uint8);
 
     /**
-     * @notice Register implementations.
-     * @dev Register implementations.
+     * @notice Set the implementation for a category.
+     * @dev Set the implementation for a category.
+     * @param category The category of the implementation.
+     * @param implementation The address of the implementation.
+     */
+    function setImplementation(address implementation, uint8 category) external;
+
+    /**
+     * @notice Retire implementations for a category.
+     * @dev Retire implementations for a category.
+     * @param category The category of the implementation.
      * @param implementations The addresses of the implementations.
      */
-    function registerImplementations(address[] memory implementations) external;
+    function retireImplementations(address[] memory implementations, uint8 category) external;
 
     /**
-     * @notice Revoke previously blessed vault implementations.
-     * @dev Existing vaults already running an unregistered implementation are unaffected — this only
-     *      stops it being a future upgrade target.
-     * @param implementations The vault implementation addresses to revoke.
+     * @notice Is this implementation registered for a category?
+     * @dev Is this implementation registered for a category?
+     * @param category The category of the implementation.
+     * @param implementation The address of the implementation.
+     * @return bool True if the implementation is registered for the category.
      */
-    function unregisterImplementations(address[] memory implementations) external;
+    function isImplementationRegisteredFor(address implementation, uint8 category) external view returns (bool);
 
     /**
-     * @notice Is this a blessed vault implementation?
-     * @param implementation The implementation address.
-     * @return bool True if registered as a valid upgrade target.
+     * @notice Get the past implementations for a category.
+     * @dev Get the past implementations for a category.
+     * @param category The category of the implementation.
+     * @return addresses The past implementations.
      */
-    function isImplementationRegistered(address implementation) external view returns (bool);
+    function getPastImplementations(uint8 category) external view returns (address[] memory);
+
+    /**
+     * @notice Get the latest implementation for a category.
+     * @dev Get the latest implementation for a category.
+     * @param category The category of the implementation.
+     * @return address The latest implementation.
+     */
+    function latestImplementation(uint8 category) external view returns (address);
 }

@@ -8,7 +8,10 @@ import {
     IBittyV1Guard,
     NotDeployer,
     LengthMismatch,
-    NotRegisteredProtocol
+    NotRegisteredProtocol,
+    IMPLEMENTATION_VAULT,
+    IMPLEMENTATION_SUB_VAULT,
+    NotRegisteredImplementation
 } from "../../src/interfaces/IBittyV1Guard.sol";
 import {MockERC20} from "lib/solmate/src/test/utils/mocks/MockERC20.sol";
 
@@ -804,60 +807,136 @@ contract BittyV1GuardTest is Test {
     // granted to DEPLOYER at launch as a bootstrap; in production it is handed to a governance
     // TimelockController, so the upgrade delay is enforced there, not in this contract.
 
-    function test_RegisterThenUnregisterImplementation() public {
+    function test_PromoteThenRetireImplementation() public {
         address implManager = makeAddr("implManager"); // stands in for the governance timelock
         bytes32 implRole = bittyGuard.IMPLEMENTATION_MANAGER_ROLE();
         vm.prank(deployAdmin);
         bittyGuard.grantRole(implRole, implManager);
 
         address impl = makeAddr("impl");
-        assertFalse(bittyGuard.isImplementationRegistered(impl), "unknown impl");
+        assertFalse(bittyGuard.isImplementationRegisteredFor(impl, IMPLEMENTATION_VAULT), "unknown impl");
 
         vm.prank(implManager);
-        bittyGuard.registerImplementations(_one(impl));
-        assertTrue(bittyGuard.isImplementationRegistered(impl), "registered");
+        bittyGuard.setImplementation(impl, IMPLEMENTATION_VAULT);
+        assertEq(bittyGuard.latestImplementation(IMPLEMENTATION_VAULT), impl, "is current");
+        assertTrue(bittyGuard.isImplementationRegisteredFor(impl, IMPLEMENTATION_VAULT));
+
+        // Superseding keeps the old build authorised: vaults still on it need a valid target.
+        address next = makeAddr("impl2");
+        vm.prank(implManager);
+        bittyGuard.setImplementation(next, IMPLEMENTATION_VAULT);
+        assertEq(bittyGuard.latestImplementation(IMPLEMENTATION_VAULT), next, "moved on");
+        assertTrue(bittyGuard.isImplementationRegisteredFor(impl, IMPLEMENTATION_VAULT), "old still allowed");
+        assertEq(bittyGuard.getPastImplementations(IMPLEMENTATION_VAULT).length, 1);
 
         vm.prank(implManager);
-        bittyGuard.unregisterImplementations(_one(impl));
-        assertFalse(bittyGuard.isImplementationRegistered(impl), "unregistered");
+        bittyGuard.retireImplementations(_one(impl), IMPLEMENTATION_VAULT);
+        assertFalse(bittyGuard.isImplementationRegisteredFor(impl, IMPLEMENTATION_VAULT), "retired");
     }
 
-    function test_DeployerCanRegisterImplementationAtLaunch() public {
+    /// A bad release has to be reversible: promoting the previous build back makes it current again.
+    function test_RollbackPromotesAPastBuildBack() public {
+        address v1 = makeAddr("v1");
+        address v2 = makeAddr("v2");
+        vm.startPrank(deployAdmin);
+        bittyGuard.setImplementation(v1, IMPLEMENTATION_VAULT);
+        bittyGuard.setImplementation(v2, IMPLEMENTATION_VAULT);
+        bittyGuard.setImplementation(v1, IMPLEMENTATION_VAULT);
+        vm.stopPrank();
+        assertEq(bittyGuard.latestImplementation(IMPLEMENTATION_VAULT), v1, "rolled back");
+        assertTrue(bittyGuard.isImplementationRegisteredFor(v2, IMPLEMENTATION_VAULT), "v2 still allowed");
+        address[] memory past = bittyGuard.getPastImplementations(IMPLEMENTATION_VAULT);
+        assertEq(past.length, 1, "v1 left the past set when promoted");
+        assertEq(past[0], v2);
+    }
+
+    /**
+     * The kinds must not bleed into one another. A sub vault shares neither storage layout nor
+     * parent check with a main vault, so main-vault code in its proxy would be unrunnable.
+     */
+    function test_CategoriesAreIsolated() public {
+        address vaultImpl = makeAddr("vaultImpl");
+        address subImpl = makeAddr("subImpl");
+        vm.startPrank(deployAdmin);
+        bittyGuard.setImplementation(vaultImpl, IMPLEMENTATION_VAULT);
+        bittyGuard.setImplementation(subImpl, IMPLEMENTATION_SUB_VAULT);
+        vm.stopPrank();
+
+        assertFalse(
+            bittyGuard.isImplementationRegisteredFor(vaultImpl, IMPLEMENTATION_SUB_VAULT), "vault code is not sub code"
+        );
+        assertFalse(
+            bittyGuard.isImplementationRegisteredFor(subImpl, IMPLEMENTATION_VAULT), "sub code is not vault code"
+        );
+    }
+
+    function test_DeployerCanSetImplementationAtLaunch() public {
         assertTrue(bittyGuard.hasRole(bittyGuard.IMPLEMENTATION_MANAGER_ROLE(), deployAdmin), "deployer bootstrapped");
         address impl = makeAddr("impl");
         vm.prank(deployAdmin);
-        bittyGuard.registerImplementations(_one(impl));
-        assertTrue(bittyGuard.isImplementationRegistered(impl), "registered by deployer");
+        bittyGuard.setImplementation(impl, IMPLEMENTATION_VAULT);
+        assertTrue(bittyGuard.isImplementationRegisteredFor(impl, IMPLEMENTATION_VAULT), "set by deployer");
     }
 
-    function test_ProtocolManagerCannotRegisterImplementation() public {
-        // protocolOwner holds PROTOCOL_MANAGER_ROLE but not IMPLEMENTATION_MANAGER_ROLE: the roles stay
-        // isolated even though the deployer happens to hold all three.
+    function test_ProtocolManagerCannotSetImplementation() public {
         assertTrue(bittyGuard.hasRole(bittyGuard.PROTOCOL_MANAGER_ROLE(), protocolOwner), "is protocol manager");
         assertFalse(bittyGuard.hasRole(bittyGuard.IMPLEMENTATION_MANAGER_ROLE(), protocolOwner), "is not impl manager");
         vm.prank(protocolOwner);
         vm.expectRevert();
-        bittyGuard.registerImplementations(_one(makeAddr("impl")));
+        bittyGuard.setImplementation(makeAddr("impl"), IMPLEMENTATION_VAULT);
     }
 
-    function test_StrangerCannotRegisterImplementation() public {
+    function test_StrangerCannotSetImplementation() public {
         vm.prank(makeAddr("stranger"));
         vm.expectRevert();
-        bittyGuard.registerImplementations(_one(makeAddr("impl")));
+        bittyGuard.setImplementation(makeAddr("impl"), IMPLEMENTATION_VAULT);
     }
 
-    function test_RegisterImplementations_emitsOncePerNewEntry() public {
+    function test_SetImplementation_emitsOncePerNewEntry() public {
         address impl = makeAddr("impl");
         vm.expectEmit(true, false, false, true, address(bittyGuard));
         emit IBittyV1Guard.ImplementationRegistered(impl);
         vm.prank(deployAdmin);
-        bittyGuard.registerImplementations(_one(impl));
+        bittyGuard.setImplementation(impl, IMPLEMENTATION_VAULT);
 
-        // Re-registering the same impl is a no-op — no event.
+        // Setting the same one again is a no-op — no event.
         vm.recordLogs();
         vm.prank(deployAdmin);
-        bittyGuard.registerImplementations(_one(impl));
-        assertEq(vm.getRecordedLogs().length, 0, "re-registering emitted a log");
+        bittyGuard.setImplementation(impl, IMPLEMENTATION_VAULT);
+        assertEq(vm.getRecordedLogs().length, 0, "re-setting emitted a log");
+    }
+
+    /// Retiring something that was never a superseded build is a mistake, not a no-op: a silent
+    /// skip would report success for a list that changed nothing.
+    function test_RetireUnknownImplementationReverts() public {
+        address stranger = makeAddr("neverRegistered");
+        vm.prank(deployAdmin);
+        vm.expectRevert(abi.encodeWithSelector(NotRegisteredImplementation.selector, stranger));
+        bittyGuard.retireImplementations(_one(stranger), IMPLEMENTATION_VAULT);
+    }
+
+    /// The current build cannot be retired while vaults are still being told to upgrade to it.
+    function test_RetireCurrentImplementationReverts() public {
+        address impl = makeAddr("impl");
+        vm.startPrank(deployAdmin);
+        bittyGuard.setImplementation(impl, IMPLEMENTATION_VAULT);
+        vm.expectRevert(abi.encodeWithSelector(NotRegisteredImplementation.selector, impl));
+        bittyGuard.retireImplementations(_one(impl), IMPLEMENTATION_VAULT);
+        vm.stopPrank();
+        assertEq(bittyGuard.latestImplementation(IMPLEMENTATION_VAULT), impl, "still current");
+    }
+
+    /// Categories are separate registries, so a build superseded under one is unknown to the other.
+    function test_RetireUnderTheWrongCategoryReverts() public {
+        address a = makeAddr("a");
+        address b = makeAddr("b");
+        vm.startPrank(deployAdmin);
+        bittyGuard.setImplementation(a, IMPLEMENTATION_VAULT);
+        bittyGuard.setImplementation(b, IMPLEMENTATION_VAULT); // a is now past, for VAULT only
+        vm.expectRevert(abi.encodeWithSelector(NotRegisteredImplementation.selector, a));
+        bittyGuard.retireImplementations(_one(a), IMPLEMENTATION_SUB_VAULT);
+        vm.stopPrank();
+        assertTrue(bittyGuard.isImplementationRegisteredFor(a, IMPLEMENTATION_VAULT), "untouched");
     }
 
     function _one(address a) internal pure returns (address[] memory arr) {

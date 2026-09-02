@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CC0-1.0
 pragma solidity ^0.8.34;
 
+import {ASSET_STABLE_COIN, ASSET_CRYPTO} from "../src/interfaces/IBittyV1Guard.sol";
 import "forge-std/console.sol";
 import {console2} from "forge-std/console2.sol";
 import {BittyV1Guard} from "../src/BittyV1Guard.sol";
@@ -18,10 +19,7 @@ interface ImmutableCreate2Factory {
 contract Deploy is DeployScript {
     ImmutableCreate2Factory immutable factory = ImmutableCreate2Factory(0x0000000000FFe8B47B3e2130213B802212439497);
 
-    uint8 internal constant STABLE_COIN_CATEGORY = 1;
-    uint8 internal constant CRYPTO_CATEGORY = 2;
-
-    bytes32 salt = 0x12ee2de7bf086388b1d560eb95e7191edfab9823e62841aa0aa6800003c4883c;
+    bytes32 salt = 0x12ee2de7bf086388b1d560eb95e7191edfab98231b108a06257b200004f087f8;
 
     function deploy() public override {
         bytes memory initCode = type(BittyV1Guard).creationCode;
@@ -32,17 +30,17 @@ contract Deploy is DeployScript {
         address[] memory assets = new address[](6);
         uint8[] memory assetCategories = new uint8[](6);
         assets[0] = getAddress("WETH");
-        assetCategories[0] = CRYPTO_CATEGORY;
+        assetCategories[0] = ASSET_CRYPTO;
         assets[1] = getAddress("WETH_AAVE");
-        assetCategories[1] = CRYPTO_CATEGORY;
+        assetCategories[1] = ASSET_CRYPTO;
         assets[2] = getAddress("WETH_UNI");
-        assetCategories[2] = CRYPTO_CATEGORY;
+        assetCategories[2] = ASSET_CRYPTO;
         assets[3] = getAddress("WBTC");
-        assetCategories[3] = CRYPTO_CATEGORY;
+        assetCategories[3] = ASSET_CRYPTO;
         assets[4] = getAddress("USDT");
-        assetCategories[4] = STABLE_COIN_CATEGORY;
+        assetCategories[4] = ASSET_STABLE_COIN;
         assets[5] = getAddress("USDC");
-        assetCategories[5] = STABLE_COIN_CATEGORY;
+        assetCategories[5] = ASSET_STABLE_COIN;
 
         bittyGuard.initialize(assets, assetCategories, new address[](0), new uint8[](0));
 
