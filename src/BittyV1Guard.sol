@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.34;
 
-import {Initializable} from "openzeppelin-contracts/contracts/proxy/utils/Initializable.sol";
+import {Initializable} from "openzeppelin-contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {
-    AccessControlDefaultAdminRules
-} from "openzeppelin-contracts/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
+    AccessControlDefaultAdminRulesUpgradeable
+} from "openzeppelin-contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
 import {
     IBittyV1Guard,
     NotDeployer,
@@ -19,7 +20,7 @@ import {EnumerableSet} from "openzeppelin-contracts/contracts/utils/structs/Enum
  * @title BittyV1Guard
  * @notice Guard of allowed assets and protocols for Bitty.
  */
-contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdminRules {
+contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeable {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     uint48 internal constant DEFAULT_ADMIN_TRANSFER_DELAY = 7 days;
@@ -44,11 +45,8 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
 
     address public constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
 
-    constructor() AccessControlDefaultAdminRules(DEFAULT_ADMIN_TRANSFER_DELAY, DEPLOYER) {
-        if (tx.origin != DEPLOYER) revert NotDeployer();
-        _grantRole(ASSET_MANAGER_ROLE, DEPLOYER);
-        _grantRole(PROTOCOL_MANAGER_ROLE, DEPLOYER);
-        _grantRole(IMPLEMENTATION_MANAGER_ROLE, DEPLOYER);
+    constructor() {
+        _disableInitializers();
     }
 
     function initialize(
@@ -56,10 +54,18 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
         uint8[] memory assetCategories_,
         address[] memory protocols_,
         uint8[] memory protocolCategories_
-    ) public initializer onlyRole(DEFAULT_ADMIN_ROLE) {
+    ) public initializer {
+        if (tx.origin != DEPLOYER) revert NotDeployer();
+        __AccessControlDefaultAdminRules_init(DEFAULT_ADMIN_TRANSFER_DELAY, DEPLOYER);
+        __UUPSUpgradeable_init();
+        _grantRole(ASSET_MANAGER_ROLE, DEPLOYER);
+        _grantRole(PROTOCOL_MANAGER_ROLE, DEPLOYER);
+        _grantRole(IMPLEMENTATION_MANAGER_ROLE, DEPLOYER);
         _addAssets(assets_, assetCategories_);
         _addProtocols(protocols_, protocolCategories_);
     }
+
+    function _authorizeUpgrade(address) internal view override onlyRole(DEFAULT_ADMIN_ROLE) {}
 
     function addAssets(address[] memory assetAddresses, uint8[] memory categories)
         external

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.34;
 
+import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {Initializable} from "openzeppelin-contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "forge-std/console.sol";
 import {Test} from "lib/forge-std/src/Test.sol";
 import {BittyV1Guard} from "../../src/BittyV1Guard.sol";
@@ -39,6 +42,22 @@ contract BittyV1GuardTest is Test {
     address[] public ammProtocols;
     address[] public intentProtocols;
 
+    /// Deploys the guard the way production does: an implementation behind an ERC-1967 proxy, with
+    /// the roles granted by initialize() rather than by a constructor the proxy never runs.
+    function _deployGuard() internal returns (BittyV1Guard g) {
+        BittyV1Guard impl = new BittyV1Guard();
+        g = BittyV1Guard(
+            address(
+                new ERC1967Proxy(
+                    address(impl),
+                    abi.encodeCall(
+                        BittyV1Guard.initialize, (new address[](0), new uint8[](0), new address[](0), new uint8[](0))
+                    )
+                )
+            )
+        );
+    }
+
     function setUp() public {
         protocolOwner = makeAddr("protocolOwner");
         ammProtocol = makeAddr("ammProtocol");
@@ -50,8 +69,11 @@ contract BittyV1GuardTest is Test {
         mockUSDT = new MockERC20("USDT", "USDT", 6);
         mockUSDC = new MockERC20("USDC", "USDC", 6);
         deployAdmin = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
-        vm.prank(deployAdmin, deployAdmin);
-        bittyGuard = new BittyV1Guard();
+        // startPrank, not prank: the helper makes several calls (implementation, then proxy), and the
+        // tx.origin gate in initialize applies to the last of them.
+        vm.startPrank(deployAdmin, deployAdmin);
+        bittyGuard = _deployGuard();
+        vm.stopPrank();
         vm.startPrank(deployAdmin);
         bittyGuard.grantRole(bittyGuard.ASSET_MANAGER_ROLE(), protocolOwner);
         bittyGuard.grantRole(bittyGuard.PROTOCOL_MANAGER_ROLE(), protocolOwner);
@@ -72,17 +94,50 @@ contract BittyV1GuardTest is Test {
         intentProtocols[0] = intentProtocol;
     }
 
-    function test_OnlyDeployerCanDeployGuard() public {
+    /**
+     * The gate is on INITIALIZE now, not the constructor: behind a proxy the constructor runs against
+     * the implementation's storage, so claiming the guard is something that happens when the proxy is
+     * initialised. Deploying the implementation itself is harmless - it can never be initialised.
+     */
+    function test_OnlyDeployerCanClaimTheGuard() public {
         address randomDeployer = makeAddr("randomDeployer");
+        BittyV1Guard impl = new BittyV1Guard();
         vm.prank(randomDeployer, randomDeployer);
         vm.expectRevert(NotDeployer.selector);
-        new BittyV1Guard();
+        new ERC1967Proxy(
+            address(impl),
+            abi.encodeCall(
+                BittyV1Guard.initialize, (new address[](0), new uint8[](0), new address[](0), new uint8[](0))
+            )
+        );
 
         address deployer = bittyGuard.DEPLOYER();
-        vm.prank(deployer, deployer);
-        BittyV1Guard g = new BittyV1Guard();
+        vm.startPrank(deployer, deployer);
+        BittyV1Guard g = _deployGuard();
+        vm.stopPrank();
         assertTrue(g.hasRole(g.DEFAULT_ADMIN_ROLE(), deployer));
         assertFalse(g.hasRole(g.DEFAULT_ADMIN_ROLE(), randomDeployer));
+    }
+
+    /// The implementation must not be initialisable in its own right.
+    function test_ImplementationCannotBeInitialised() public {
+        BittyV1Guard impl = new BittyV1Guard();
+        vm.prank(bittyGuard.DEPLOYER(), bittyGuard.DEPLOYER());
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        impl.initialize(new address[](0), new uint8[](0), new address[](0), new uint8[](0));
+    }
+
+    /// Upgrading the guard is the highest privilege in the system: default admin only.
+    function test_OnlyAdminCanUpgradeTheGuard() public {
+        BittyV1Guard next = new BittyV1Guard();
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert();
+        UUPSUpgradeable(address(bittyGuard)).upgradeToAndCall(address(next), "");
+
+        vm.prank(deployAdmin);
+        UUPSUpgradeable(address(bittyGuard)).upgradeToAndCall(address(next), "");
+        // State survives: the proxy kept its storage, so the roles granted in setUp are still there.
+        assertTrue(bittyGuard.hasRole(bittyGuard.ASSET_MANAGER_ROLE(), protocolOwner), "roles survived");
     }
 
     function test_AddRegisteredAssets() public {
@@ -336,7 +391,7 @@ contract BittyV1GuardTest is Test {
 
     function test_InitializeSeedsEveryRegistry() public {
         vm.startPrank(deployAdmin, deployAdmin);
-        BittyV1Guard guard = new BittyV1Guard();
+        BittyV1Guard guardImpl = new BittyV1Guard();
         address[] memory allProtocols_ = new address[](4);
         allProtocols_[0] = lendingProtocol;
         allProtocols_[1] = stakingProtocol;
@@ -358,7 +413,14 @@ contract BittyV1GuardTest is Test {
             seedAssets[assets.length + i] = stableCoins[i];
             seedCategories[assets.length + i] = STABLE_CAT;
         }
-        guard.initialize(seedAssets, seedCategories, allProtocols_, categories);
+        BittyV1Guard guard = BittyV1Guard(
+            address(
+                new ERC1967Proxy(
+                    address(guardImpl),
+                    abi.encodeCall(BittyV1Guard.initialize, (seedAssets, seedCategories, allProtocols_, categories))
+                )
+            )
+        );
         vm.stopPrank();
 
         for (uint256 i = 0; i < assets.length; i++) {
@@ -691,10 +753,31 @@ contract BittyV1GuardTest is Test {
         assertTrue(bittyGuard.isAssetRegistered(address(mockWETH)));
     }
 
-    function test_GetBittyV1GuardInitCode() public pure {
-        bytes32 initCodeHash = keccak256(type(BittyV1Guard).creationCode);
-        console.log("INIT_CODE_HASH");
-        console.logBytes32(initCodeHash);
+    /**
+     * The hash to mine a vanity guard address against.
+     *
+     * It is the PROXY's, not the implementation's. BITTY_GUARD is compiled into every vault and now
+     * points at the proxy; the implementation goes through the standard CREATE2 deployer at salt 0,
+     * where its address follows from its bytecode and no mining applies. Mining the implementation
+     * hash would produce a salt for an address nothing ever deploys to.
+     *
+     * The proxy is constructed with EMPTY init data on purpose, so this hash carries no per-chain
+     * seed data and one mined salt lands on the same address on every chain.
+     */
+    function test_GetBittyV1GuardProxyInitCode() public pure {
+        address impl = address(
+            uint160(
+                uint256(
+                    keccak256(
+                        abi.encodePacked(
+                            bytes1(0xff), SIMPLE_CREATE2, bytes32(0), keccak256(type(BittyV1Guard).creationCode)
+                        )
+                    )
+                )
+            )
+        );
+        console.log("PROXY INIT_CODE_HASH (mine the guard salt against this)");
+        console.logBytes32(keccak256(abi.encodePacked(type(ERC1967Proxy).creationCode, abi.encode(impl, bytes("")))));
     }
 
     function _addProtocols(address[] memory protocols, uint8 category) internal {
@@ -708,6 +791,8 @@ contract BittyV1GuardTest is Test {
             categories[i] = category;
         }
     }
+
+    address internal constant SIMPLE_CREATE2 = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
     uint8 internal constant CRYPTO_CAT = 2;
     uint8 internal constant STABLE_CAT = 1;
