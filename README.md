@@ -24,25 +24,43 @@ This is a **proxy** address. The guard is a UUPS proxy, so the address above is 
 | **Protocols** | Add / deprecate | Deprecated protocols are exit-only — existing positions can be withdrawn, but no new deposits |
 | **Implementations** | Set / retire | An account may only UUPS-upgrade to the current or a past implementation of its category; retiring one blocks it as a *future* target but does not affect accounts already running it |
 
-There is no separate stable-coin registry. A stable coin is an asset registered with the stable-coin category; callers distinguish token types by reading `assetCategory`.
+There is no separate stable-coin registry. A stable coin is an asset whose category bitmask includes `ASSET_STABLE_COIN`; callers distinguish token types with a bitwise test — `assetCategory(token) & ASSET_STABLE_COIN != 0` — not `==` (see the asset-bitmask note under [Category conventions](#category-conventions)).
 
 The implementation registry is what makes account upgrades governance-gated: each account's `_authorizeUpgrade` asks `isImplementationRegisteredFor(newImpl, category)`, so no account can upgrade to code the guard has not blessed. Registration here is immediate — the upgrade **delay** lives in governance (the `IMPLEMENTATION_MANAGER_ROLE` holder is a `TimelockController`), not in this contract.
 
-Every registry entry carries a `uint8` category supplied by the caller. The guard rejects category `0` (treated as "skip this entry" for assets and protocols, and as an error for implementations) and does not interpret any other value — meaning is a convention shared with vaults and other consumers. Category `0` on read means the address was never registered.
+Every registry entry carries a `uint8` category supplied by the caller. The guard rejects category `0` (treated as "skip this entry" for assets and protocols, and as an error for implementations) and does not interpret any other value — meaning is a convention shared with vaults and other consumers. Category `0` on read means the address was never registered. Because the value is stored verbatim and never interpreted, **assets treat it as a bitmask** (one asset can hold several categories at once, below); protocols and implementations use it as a single category.
 
 ### Category conventions
 
-The three category namespaces are independent — the same number means different things in each. They are exported as named constants from [`IBittyV1Guard.sol`](src/interfaces/IBittyV1Guard.sol) so consumers do not hardcode integers:
+The three category namespaces are independent — the same number means different things in each. The shipped constants are exported from [`IBittyV1Guard.sol`](src/interfaces/IBittyV1Guard.sol) so consumers do not hardcode integers; `ASSET_AMM_SUPPORTED` is **reserved by convention here** (the guard already stores it fine as an opaque bitmask value — see below — so it is documented now and added to the interface when a consumer adopts it):
 
-| Constant | Value | Namespace |
-|----------|-------|-----------|
-| `ASSET_STABLE_COIN` | `1` | Assets |
-| `ASSET_CRYPTO` | `2` | Assets |
-| `PROTOCOL_LENDING` | `1` | Protocols |
-| `PROTOCOL_STAKING` | `2` | Protocols |
-| `PROTOCOL_AMM` | `3` | Protocols |
-| `PROTOCOL_INTENT` | `4` | Protocols |
-| `IMPLEMENTATION_VAULT` | `1` | Implementations |
+| Constant | Value | Namespace | Kind |
+|----------|-------|-----------|------|
+| `ASSET_STABLE_COIN` | `1` (`0b0001`) | Assets | bit flag |
+| `ASSET_CRYPTO` | `2` (`0b0010`) | Assets | bit flag |
+| `ASSET_AMM_SUPPORTED` | `4` (`0b0100`) | Assets | bit flag |
+| `PROTOCOL_LENDING` | `1` | Protocols | single value |
+| `PROTOCOL_STAKING` | `2` | Protocols | single value |
+| `PROTOCOL_AMM` | `3` | Protocols | single value |
+| `PROTOCOL_INTENT` | `4` | Protocols | single value |
+| `IMPLEMENTATION_VAULT` | `1` | Implementations | single value |
+
+**Asset categories are a bitmask.** Every `ASSET_*` flag is a distinct power of two, so an asset's `assetCategory` is the OR of *every* category it belongs to — one asset can be several at once. Register an asset with the combined mask, and test membership with a bitwise AND, never `==`:
+
+```solidity
+// ETH is both crypto AND usable in AMM pools:
+addAssets([WETH], [ASSET_CRYPTO | ASSET_AMM_SUPPORTED]);   // stores 2 | 4 = 6
+
+// Consumers check a single capability, ignoring the other bits:
+guard.assetCategory(WETH) & ASSET_STABLE_COIN   != 0;      // false
+guard.assetCategory(WETH) & ASSET_AMM_SUPPORTED != 0;      // true
+```
+
+An `==` comparison (`assetCategory(token) == ASSET_STABLE_COIN`) is a bug the moment an asset carries more than one flag — always mask with `&`.
+
+Adding a new asset capability is just the next power of two (`8`, `16`, …). The guard needs no change — it stores the mask verbatim and never interprets it — so a new flag is only a convention agreed with consumers plus its constant here and in `IBittyV1Guard.sol`. `ASSET_AMM_SUPPORTED` above is documented as that convention; keep the values powers of two so they stay OR-able.
+
+Protocol and implementation categories are **not** bitmasks — each entry is exactly one category (a protocol is one kind of protocol; an implementation belongs to one account type), so those are read with `==`.
 
 Sub vaults have no category of their own. A sub vault is a beacon proxy whose beacon is its parent vault, so it runs the sub-vault build shipped with the parent's own — already guard-blessed — implementation, and follows the parent's upgrade automatically. There is nothing separate for the guard to bless. The registry itself stays generic over `category`, so a future account type can claim `2` without a contract change.
 
@@ -280,11 +298,11 @@ function initialize(
     uint8[] calldata protocolCategories
 ) external;
 
-// Assets — every asset carries a category; stable coins use ASSET_STABLE_COIN
+// Assets — each `category` is a BITMASK (OR of ASSET_* flags); test with `& flag != 0`, not `==`
 function addAssets(address[] calldata, uint8[] calldata categories) external;
 function removeAssets(address[] calldata) external;
 function isAssetRegistered(address) external view returns (bool);
-function assetCategory(address) external view returns (uint8);
+function assetCategory(address) external view returns (uint8); // the full bitmask
 
 // Protocols — enumerable, split into active and deprecated
 function addProtocols(address[] calldata, uint8[] calldata categories) external;
