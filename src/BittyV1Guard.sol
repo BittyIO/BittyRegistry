@@ -31,6 +31,7 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
     bytes32 public constant ASSET_MANAGER_ROLE = keccak256("ASSET_MANAGER_ROLE");
     bytes32 public constant PROTOCOL_MANAGER_ROLE = keccak256("PROTOCOL_MANAGER_ROLE");
     bytes32 public constant IMPLEMENTATION_MANAGER_ROLE = keccak256("IMPLEMENTATION_MANAGER_ROLE");
+    bytes32 public constant CONFIG_MANAGER_ROLE = keccak256("CONFIG_MANAGER_ROLE");
 
     EnumerableSet.AddressSet internal _protocols;
 
@@ -45,6 +46,10 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
     mapping(uint8 category => address) public latestImplementation;
 
     mapping(uint8 category => EnumerableSet.AddressSet) internal _pastImplementations;
+
+    mapping(bytes32 key => address) internal _config;
+
+    mapping(bytes32 key => uint256) internal _configUint;
 
     address public constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
 
@@ -64,6 +69,7 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
         _grantRole(ASSET_MANAGER_ROLE, DEPLOYER);
         _grantRole(PROTOCOL_MANAGER_ROLE, DEPLOYER);
         _grantRole(IMPLEMENTATION_MANAGER_ROLE, DEPLOYER);
+        _grantRole(CONFIG_MANAGER_ROLE, DEPLOYER);
         _addAssets(assets_, assetCategories_);
         _addProtocols(protocols_, protocolCategories_);
     }
@@ -219,5 +225,23 @@ contract BittyV1Guard is IBittyV1Guard, Initializable, AccessControlDefaultAdmin
 
     function getPastImplementations(uint8 category) external view override returns (address[] memory) {
         return _pastImplementations[category].values();
+    }
+
+    function getAddress(bytes32 key) external view override returns (address) {
+        return _config[key];
+    }
+
+    function setAddress(bytes32 key, address value) external override onlyRole(CONFIG_MANAGER_ROLE) {
+        _config[key] = value;
+        emit ConfigSet(key, value);
+    }
+
+    function getUint(bytes32 key) external view override returns (uint256) {
+        return _configUint[key];
+    }
+
+    function setUint(bytes32 key, uint256 value) external override onlyRole(CONFIG_MANAGER_ROLE) {
+        _configUint[key] = value;
+        emit ConfigUintSet(key, value);
     }
 }

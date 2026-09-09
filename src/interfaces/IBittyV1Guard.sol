@@ -29,6 +29,8 @@ interface IBittyV1Guard {
     event ProtocolDeprecated(address indexed protocolAddress);
     event ImplementationRegistered(address indexed implementation);
     event ImplementationUnregistered(address indexed implementation);
+    event ConfigSet(bytes32 indexed key, address value);
+    event ConfigUintSet(bytes32 indexed key, uint256 value);
 
     /**
      * @notice Add registered assets to Bitty.
@@ -177,4 +179,36 @@ interface IBittyV1Guard {
      * @return address The latest implementation.
      */
     function latestImplementation(uint8 category) external view returns (address);
+
+    /**
+     * @notice Read a chain-specific config address by key.
+     * @dev Keyed by a caller-chosen `bytes32`, e.g. `keccak256("bitty.gasWrapped")`. This is how
+     *      chain-varying addresses (the wrapped-gas token, the governance owner) are sourced from one
+     *      place instead of being injected per deployment.
+     * @param key The config key.
+     * @return The configured address, or the zero address if never set.
+     */
+    function getAddress(bytes32 key) external view returns (address);
+
+    /**
+     * @notice Set a chain-specific config address. Restricted to CONFIG_MANAGER_ROLE.
+     * @param key The config key.
+     * @param value The address to store under `key`.
+     */
+    function setAddress(bytes32 key, address value) external;
+
+    /**
+     * @notice Read a chain-specific config integer by key.
+     * @dev The guard stores the raw value only — any ceiling or clamp is the reader's responsibility.
+     * @param key The config key, e.g. `keccak256("bitty.gas.feePerOp")`.
+     * @return The configured value, or 0 if never set.
+     */
+    function getUint(bytes32 key) external view returns (uint256);
+
+    /**
+     * @notice Set a chain-specific config integer. Restricted to CONFIG_MANAGER_ROLE.
+     * @param key The config key.
+     * @param value The value to store under `key`.
+     */
+    function setUint(bytes32 key, uint256 value) external;
 }

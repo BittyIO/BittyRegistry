@@ -1056,6 +1056,93 @@ contract BittyV1GuardTest is Test {
         assertTrue(bittyGuard.isImplementationRegisteredFor(a, IMPLEMENTATION_VAULT), "untouched");
     }
 
+    // ── config address map ──────────────────────────────────────────────────────
+
+    function test_DeployerHoldsConfigManagerRole() public view {
+        assertTrue(bittyGuard.hasRole(bittyGuard.CONFIG_MANAGER_ROLE(), deployAdmin), "deployer is config manager");
+    }
+
+    function test_ConfigManagerCanSetAndReadAddress() public {
+        bytes32 key = keccak256("bitty.gasWrapped");
+        address value = address(mockWETH);
+
+        vm.expectEmit(true, false, false, true, address(bittyGuard));
+        emit IBittyV1Guard.ConfigSet(key, value);
+        vm.prank(deployAdmin);
+        bittyGuard.setAddress(key, value);
+
+        assertEq(bittyGuard.getAddress(key), value, "stored value is readable");
+    }
+
+    function test_UnsetConfigKeyReadsZero() public view {
+        assertEq(bittyGuard.getAddress(keccak256("never.set")), address(0), "unset key is zero");
+    }
+
+    function test_ConfigValueCanBeOverwritten() public {
+        bytes32 key = keccak256("bitty.owner");
+        vm.startPrank(deployAdmin);
+        bittyGuard.setAddress(key, address(0xAAAA));
+        bittyGuard.setAddress(key, address(0xBBBB));
+        vm.stopPrank();
+        assertEq(bittyGuard.getAddress(key), address(0xBBBB), "latest write wins");
+    }
+
+    function test_StrangerCannotSetConfig() public {
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert();
+        bittyGuard.setAddress(keccak256("bitty.gasWrapped"), address(mockWETH));
+    }
+
+    /// CONFIG_MANAGER_ROLE is its own role — holding another manager role is not enough.
+    function test_ProtocolManagerCannotSetConfig() public {
+        assertTrue(bittyGuard.hasRole(bittyGuard.PROTOCOL_MANAGER_ROLE(), protocolOwner), "is protocol manager");
+        assertFalse(bittyGuard.hasRole(bittyGuard.CONFIG_MANAGER_ROLE(), protocolOwner), "is not config manager");
+        vm.prank(protocolOwner);
+        vm.expectRevert();
+        bittyGuard.setAddress(keccak256("bitty.gasWrapped"), address(mockWETH));
+    }
+
+    function test_ConfigManagerRoleCanBeDelegated() public {
+        address ops = makeAddr("ops");
+        bytes32 role = bittyGuard.CONFIG_MANAGER_ROLE();
+        vm.prank(deployAdmin);
+        bittyGuard.grantRole(role, ops);
+
+        bytes32 key = keccak256("bitty.gasWrapped");
+        vm.prank(ops);
+        bittyGuard.setAddress(key, address(mockWBTC));
+        assertEq(bittyGuard.getAddress(key), address(mockWBTC), "delegated manager can set");
+    }
+
+    function test_ConfigManagerCanSetAndReadUint() public {
+        bytes32 key = keccak256("bitty.gas.feePerOp");
+
+        vm.expectEmit(true, false, false, true, address(bittyGuard));
+        emit IBittyV1Guard.ConfigUintSet(key, 25);
+        vm.prank(deployAdmin);
+        bittyGuard.setUint(key, 25);
+
+        assertEq(bittyGuard.getUint(key), 25, "stored uint is readable");
+    }
+
+    function test_UnsetConfigUintReadsZero() public view {
+        assertEq(bittyGuard.getUint(keccak256("never.set.uint")), 0, "unset uint key is zero");
+    }
+
+    function test_StrangerCannotSetUint() public {
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert();
+        bittyGuard.setUint(keccak256("bitty.gas.feePerOp"), 25);
+    }
+
+    /// The guard stores the raw value with no ceiling — clamping is the vault's job.
+    function test_SetUintStoresRawValueUnbounded() public {
+        bytes32 key = keccak256("bitty.gas.dailyMax");
+        vm.prank(deployAdmin);
+        bittyGuard.setUint(key, type(uint256).max);
+        assertEq(bittyGuard.getUint(key), type(uint256).max, "no ceiling enforced in the guard");
+    }
+
     function _one(address a) internal pure returns (address[] memory arr) {
         arr = new address[](1);
         arr[0] = a;
